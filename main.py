@@ -9,18 +9,23 @@ import asyncio
 import secrets
 import hashlib
 import base64
+from pathlib import Path
 
+from dotenv import load_dotenv
 import structlog
 from fastmcp import FastMCP
+from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.responses import JSONResponse, HTMLResponse, RedirectResponse
 from starlette.routing import Route
-from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 
 from opencode_client import OpenCodeClient
 from session_manager import SessionManager
 from pty_manager import PtyManager
+
+dotenv_path = Path(__file__).parent / ".env"
+load_dotenv(dotenv_path)
 
 structlog.configure(
     processors=[
@@ -55,7 +60,7 @@ def create_fastmcp() -> FastMCP:
     )
 
     @mcp.tool()
-    def list_sessions(cursor: str = None, limit: int = 10) -> dict:
+    async def list_sessions(cursor: str = None, limit: int = 10) -> dict:
         """List OpenCode sessions with pagination.
 
         Returns all known sessions (up to limit) with recent message previews.
@@ -65,14 +70,11 @@ def create_fastmcp() -> FastMCP:
             cursor: Cursor from previous response to get next page (optional)
             limit: Maximum sessions to return (default 10, max 50)
         """
-        import asyncio
         limit = min(limit, 50)
-        return asyncio.get_event_loop().run_until_complete(
-            session_mgr.list_sessions(cursor=cursor, limit=limit)
-        )
+        return await session_mgr.list_sessions(cursor=cursor, limit=limit)
 
     @mcp.tool()
-    def session_create(
+    async def session_create(
         initial_message: str,
         title: str = None,
         directory: str = None,
@@ -92,40 +94,34 @@ def create_fastmcp() -> FastMCP:
             mode: 'planning' (default) or 'building' - mode for the new session
             auto_accept: If True, sets permissions to allow all (no permission prompts)
         """
-        import asyncio
         permissions = None
         if auto_accept:
             permissions = [{"permission": "*", "pattern": "*", "action": "allow"}]
-        return asyncio.get_event_loop().run_until_complete(
-            session_mgr.create_session(
-                initial_message=initial_message,
-                title=title,
-                directory=directory,
-                mode=mode,
-                permissions=permissions
-            )
+        return await session_mgr.create_session(
+            initial_message=initial_message,
+            title=title,
+            directory=directory,
+            mode=mode,
+            permissions=permissions
         )
 
     @mcp.tool()
-    def session_get(session_id: str) -> dict:
+    async def session_get(session_id: str) -> dict:
         """Get session details."""
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(session_mgr.get_session(session_id))
+        return await session_mgr.get_session(session_id)
 
     @mcp.tool()
-    def session_delete(session_id: str) -> dict:
+    async def session_delete(session_id: str) -> dict:
         """Delete a session."""
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(session_mgr.delete_session(session_id))
+        return await session_mgr.delete_session(session_id)
 
     @mcp.tool()
-    def session_fork(session_id: str) -> dict:
+    async def session_fork(session_id: str) -> dict:
         """Fork a session."""
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(session_mgr.fork_session(session_id))
+        return await session_mgr.fork_session(session_id)
 
     @mcp.tool()
-    def send_message(session_id: str, prompt: str) -> dict:
+    async def send_message(session_id: str, prompt: str) -> dict:
         """Send a message to a session with timeout handling.
 
         Sends the message and waits for OpenCode's response. If the response
@@ -136,40 +132,32 @@ def create_fastmcp() -> FastMCP:
             session_id: The session ID to send the message to
             prompt: The message text
         """
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            session_mgr.send_message(session_id, prompt)
-        )
+        return await session_mgr.send_message(session_id, prompt)
 
     @mcp.tool()
-    def message_abort(session_id: str) -> dict:
+    async def message_abort(session_id: str) -> dict:
         """Abort ongoing generation."""
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(session_mgr.abort_message(session_id))
+        return await session_mgr.abort_message(session_id)
 
     @mcp.tool()
-    def bash_create(cwd: str = None) -> dict:
+    async def bash_create(cwd: str = None) -> dict:
         """Create a PTY terminal."""
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(pty_mgr.create_pty(cwd=cwd, owner="claude"))
+        return await pty_mgr.create_pty(cwd=cwd, owner="claude")
 
     @mcp.tool()
-    def bash_read(pty_id: str) -> str:
+    async def bash_read(pty_id: str) -> str:
         """Read PTY output."""
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(pty_mgr.read_output(pty_id))
+        return await pty_mgr.read_output(pty_id)
 
     @mcp.tool()
-    def bash_resize(pty_id: str, cols: int, rows: int) -> dict:
+    async def bash_resize(pty_id: str, cols: int, rows: int) -> dict:
         """Resize PTY."""
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(pty_mgr.resize_pty(pty_id, cols, rows))
+        return await pty_mgr.resize_pty(pty_id, cols, rows)
 
     @mcp.tool()
-    def bash_close(pty_id: str) -> dict:
+    async def bash_close(pty_id: str) -> dict:
         """Close PTY."""
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(pty_mgr.close_pty(pty_id))
+        return await pty_mgr.close_pty(pty_id)
 
     @mcp.tool()
     def status() -> dict:
@@ -184,7 +172,7 @@ def create_fastmcp() -> FastMCP:
         }
 
     @mcp.tool()
-    def read_session_logs(session_id: str, mode: str = "summary") -> dict:
+    async def read_session_logs(session_id: str, mode: str = "summary") -> dict:
         """Read session logs (non-blocking).
 
         Read a session's message history without waiting. Use this to check
@@ -194,12 +182,9 @@ def create_fastmcp() -> FastMCP:
             session_id: The session ID
             mode: "summary" (last 3 messages, default) or "full" (all messages)
         """
-        import asyncio
         if mode not in ("summary", "full"):
             mode = "summary"
-        return asyncio.get_event_loop().run_until_complete(
-            session_mgr.read_session_logs(session_id, mode=mode)
-        )
+        return await session_mgr.read_session_logs(session_id, mode=mode)
 
     @mcp.tool()
     def switch_session(session_id: str) -> dict:
@@ -212,7 +197,7 @@ def create_fastmcp() -> FastMCP:
         return session_mgr.set_session_model(session_id, model)
 
     @mcp.tool()
-    def switch_mode_and_send(session_id: str, mode: str, message: str) -> dict:
+    async def switch_mode_and_send(session_id: str, mode: str, message: str) -> dict:
         """Switch a session to a different mode AND send a message in one call.
 
         This is the primary way to transition from planning to building mode.
@@ -224,10 +209,7 @@ def create_fastmcp() -> FastMCP:
             mode: Target mode - 'planning' or 'building'
             message: Message to send after switching mode (e.g., "Now build this plan")
         """
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            session_mgr.switch_mode_and_send(session_id, mode, message)
-        )
+        return await session_mgr.switch_mode_and_send(session_id, mode, message)
 
     @mcp.tool()
     def get_session_mode(session_id: str) -> dict:
@@ -242,7 +224,7 @@ def create_fastmcp() -> FastMCP:
         return {"active_session_id": active_id}
 
     @mcp.tool()
-    def set_permissions(session_id: str, permissions: list) -> dict:
+    async def set_permissions(session_id: str, permissions: list) -> dict:
         """Set permissions for a session.
 
         Args:
@@ -250,25 +232,19 @@ def create_fastmcp() -> FastMCP:
             permissions: List of permission dicts, e.g., [{"permission": "*", "pattern": "*", "action": "allow"}]
                        Valid actions: "allow", "deny", "ask"
         """
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            session_mgr.set_session_permissions(session_id, permissions)
-        )
+        return await session_mgr.set_session_permissions(session_id, permissions)
 
     @mcp.tool()
-    def auto_accept_permissions(session_id: str) -> dict:
+    async def auto_accept_permissions(session_id: str) -> dict:
         """Enable auto-accept (allow all) permissions for a session.
 
         This removes all permission prompts for the session.
         """
         permissions = [{"permission": "*", "pattern": "*", "action": "allow"}]
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            session_mgr.set_session_permissions(session_id, permissions)
-        )
+        return await session_mgr.set_session_permissions(session_id, permissions)
 
     @mcp.tool()
-    def wait_for_session(session_id: str, duration: int = 50) -> dict:
+    async def wait_for_session(session_id: str, duration: int = 50) -> dict:
         """Wait for a session and collect activity.
 
         Monitors a session for the specified duration, collecting tool calls,
@@ -283,10 +259,7 @@ def create_fastmcp() -> FastMCP:
             session_id: The session ID to monitor
             duration: Seconds to wait (minimum 30, default 50)
         """
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            session_mgr.wait_for_session(session_id, duration)
-        )
+        return await session_mgr.wait_for_session(session_id, duration)
 
     return mcp
 
@@ -300,8 +273,8 @@ async def handle_health(request: Request) -> JSONResponse:
     })
 
 
-async def handle_oauth_authorize(request: Request) -> HTMLResponse:
-    """OAuth authorization page."""
+async def handle_oauth_authorize(request: Request):
+    """OAuth authorization - auto-approves known clients and redirects back with code."""
     params = dict(request.query_params)
     client_id = params.get("client_id", "")
     redirect_uri = params.get("redirect_uri", "")
@@ -310,60 +283,34 @@ async def handle_oauth_authorize(request: Request) -> HTMLResponse:
     code_challenge_method = params.get("code_challenge_method", "S256")
     scope = params.get("scope", "mcp")
 
+    logger.info(
+        "oauth_authorize_request",
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        pkce_enabled=bool(code_challenge),
+        code_challenge_method=code_challenge_method,
+    )
+
     if not secrets.compare_digest(client_id, "opencode-mcp-gateway"):
+        logger.warning("oauth_authorize_invalid_client", client_id=client_id)
         return HTMLResponse("<h1>Invalid client_id</h1>", status_code=400)
 
-    code = secrets.token_hex(32)
+    if not redirect_uri:
+        logger.warning("oauth_authorize_missing_redirect_uri", client_id=client_id)
+        return HTMLResponse("<h1>Missing redirect_uri</h1>", status_code=400)
 
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Authorize Claude Code</title>
-        <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; }}
-            .card {{ border: 1px solid #ddd; border-radius: 8px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-            h1 {{ font-size: 24px; margin-bottom: 10px; }}
-            p {{ color: #666; margin-bottom: 20px; }}
-            .client {{ font-weight: bold; color: #333; }}
-            .scopes {{ background: #f5f5f5; padding: 10px; border-radius: 4px; margin: 15px 0; font-size: 14px; }}
-            .buttons {{ display: flex; gap: 10px; margin-top: 25px; }}
-            button {{ flex: 1; padding: 12px 20px; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; }}
-            .approve {{ background: #d73a49; color: white; }}
-            .deny {{ background: #f6f7f8; color: #333; border: 1px solid #ddd; }}
-            button:hover {{ opacity: 0.9; }}
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>Authorize Claude Code</h1>
-            <p><span class="client">Claude Code</span> is requesting access to your OpenCode server.</p>
-            <div class="scopes">
-                <strong>Scopes:</strong> {scope}
-            </div>
-            <p style="font-size: 14px; color: #888;">Client ID: {client_id}</p>
-            <div class="buttons">
-                <form method="post" action="/oauth/authorize" style="flex:1;">
-                    <input type="hidden" name="client_id" value="{client_id}">
-                    <input type="hidden" name="redirect_uri" value="{redirect_uri}">
-                    <input type="hidden" name="state" value="{state}">
-                    <input type="hidden" name="code" value="{code}">
-                    <input type="hidden" name="code_challenge" value="{code_challenge}">
-                    <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
-                    <input type="hidden" name="scope" value="{scope}">
-                    <button type="submit" name="action" value="approve" class="approve">Authorize</button>
-                </form>
-                <form method="post" action="/oauth/authorize" style="flex:1;">
-                    <input type="hidden" name="redirect_uri" value="{redirect_uri}">
-                    <input type="hidden" name="state" value="{state}">
-                    <button type="submit" name="action" value="deny" class="deny">Deny</button>
-                </form>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-    return HTMLResponse(html)
+    code = secrets.token_hex(32)
+    auth_codes[code] = {
+        "client_id": "opencode-mcp-gateway",
+        "code_challenge": code_challenge,
+        "code_challenge_method": code_challenge_method,
+        "scope": scope,
+        "expires": asyncio.get_event_loop().time() + 300
+    }
+
+    import urllib.parse
+    params_encoded = urllib.parse.urlencode({"code": code, "state": state})
+    return RedirectResponse(f"{redirect_uri}?{params_encoded}", status_code=302)
 
 
 async def handle_oauth_authorize_post(request: Request) -> RedirectResponse:
@@ -407,27 +354,102 @@ async def handle_oauth_token(request: Request) -> JSONResponse:
             body = {k: str(v) for k, v in form.items()}
         else:
             body = await request.json()
-        logger.info("token_request", body=body, headers=dict(request.headers))
+
+        def mask_sensitive(payload: dict) -> dict:
+            masked = dict(payload)
+            for key in ("client_secret", "code_verifier", "refresh_token", "assertion"):
+                if key in masked and masked[key]:
+                    masked[key] = "***redacted***"
+            if masked.get("code"):
+                masked["code"] = f"{str(masked['code'])[:8]}..."
+            return masked
+
+        def extract_client_credentials(payload: dict, headers: dict) -> tuple[str, str]:
+            client_id = str(payload.get("client_id", ""))
+            client_secret = str(payload.get("client_secret", ""))
+            auth_header = headers.get("authorization", "")
+
+            if auth_header.startswith("Basic "):
+                try:
+                    raw = base64.b64decode(auth_header[6:]).decode("utf-8")
+                    basic_client_id, basic_client_secret = raw.split(":", 1)
+                    if not client_id:
+                        client_id = basic_client_id
+                    if not client_secret:
+                        client_secret = basic_client_secret
+                except Exception:
+                    logger.warning("oauth_invalid_basic_auth_header")
+
+            return client_id, client_secret
+
+        logger.info(
+            "token_request",
+            body=mask_sensitive(body),
+            headers={
+                "user-agent": request.headers.get("user-agent", ""),
+                "content-type": request.headers.get("content-type", ""),
+                "x-forwarded-for": request.headers.get("x-forwarded-for", ""),
+            },
+        )
+
         grant_type = str(body.get("grant_type", ""))
         code = str(body.get("code", ""))
         code_verifier = str(body.get("code_verifier", ""))
+        client_id, client_secret = extract_client_credentials(body, dict(request.headers))
 
         if grant_type == "authorization_code" and code:
             auth_info = auth_codes.pop(code, None)
             if not auth_info:
+                logger.warning(
+                    "oauth_invalid_grant_code_not_found",
+                    client_id=client_id,
+                    code_prefix=code[:8],
+                )
                 return JSONResponse({"error": "invalid_grant"}, status_code=400)
 
             if asyncio.get_event_loop().time() > auth_info["expires"]:
+                logger.warning(
+                    "oauth_code_expired",
+                    client_id=client_id,
+                    code_prefix=code[:8],
+                )
                 return JSONResponse({"error": "code_expired"}, status_code=400)
 
-            if auth_info["code_challenge_method"] == "S256":
-                verifier_hash = hashlib.sha256(code_verifier.encode()).digest()
-                expected_challenge = base64.urlsafe_b64encode(verifier_hash).decode().rstrip("=")
-            else:
-                expected_challenge = code_verifier
+            code_challenge = str(auth_info.get("code_challenge", ""))
+            if code_challenge:
+                if not code_verifier:
+                    logger.warning(
+                        "oauth_missing_code_verifier",
+                        client_id=client_id,
+                        code_prefix=code[:8],
+                    )
+                    return JSONResponse({"error": "invalid_grant"}, status_code=400)
 
-            if not secrets.compare_digest(expected_challenge, auth_info["code_challenge"]):
-                return JSONResponse({"error": "invalid_grant"}, status_code=400)
+                if auth_info.get("code_challenge_method") == "S256":
+                    verifier_hash = hashlib.sha256(code_verifier.encode()).digest()
+                    expected_challenge = base64.urlsafe_b64encode(verifier_hash).decode().rstrip("=")
+                else:
+                    expected_challenge = code_verifier
+
+                if not secrets.compare_digest(expected_challenge, code_challenge):
+                    logger.warning(
+                        "oauth_pkce_mismatch",
+                        client_id=client_id,
+                        code_prefix=code[:8],
+                    )
+                    return JSONResponse({"error": "invalid_grant"}, status_code=400)
+            else:
+                # Confidential client fallback for authorization_code flows without PKCE.
+                if not (
+                    secrets.compare_digest(client_id, "opencode-mcp-gateway")
+                    and secrets.compare_digest(client_secret, AUTH_TOKEN)
+                ):
+                    logger.warning(
+                        "oauth_invalid_client_for_auth_code",
+                        client_id=client_id,
+                        code_prefix=code[:8],
+                    )
+                    return JSONResponse({"error": "invalid_client"}, status_code=401)
 
             return JSONResponse({
                 "access_token": AUTH_TOKEN,
@@ -435,10 +457,8 @@ async def handle_oauth_token(request: Request) -> JSONResponse:
                 "expires_in": 86400
             })
 
-        client_id = body.get("client_id", "")
-        client_secret = body.get("client_secret", "")
-
-        if secrets.compare_digest(client_id, "opencode-mcp-gateway") and \
+        if grant_type == "client_credentials" and \
+           secrets.compare_digest(client_id, "opencode-mcp-gateway") and \
            secrets.compare_digest(client_secret, AUTH_TOKEN):
             return JSONResponse({
                 "access_token": AUTH_TOKEN,
@@ -446,40 +466,86 @@ async def handle_oauth_token(request: Request) -> JSONResponse:
                 "expires_in": 86400
             })
 
-        return JSONResponse({"error": "invalid_client"}, status_code=401)
+        if grant_type == "client_credentials":
+            logger.warning("oauth_invalid_client_credentials", client_id=client_id)
+            return JSONResponse({"error": "invalid_client"}, status_code=401)
+
+        logger.warning("oauth_unsupported_grant_type", grant_type=grant_type, client_id=client_id)
+        return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
+
     except Exception as e:
         logger.error("oauth_token_error", error=str(e), headers=dict(request.headers))
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-class HTTPSRedirectMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-        if response.status_code in (307, 308):
-            location = response.headers.get("location", "")
-            if location.startswith("http://"):
-                location = "https://" + location[7:]
-                response.headers["location"] = location
-        return response
+class HTTPSRedirectMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message):
+            if message.get("type") == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                location = headers.get("location", "")
+                if location.startswith("http://"):
+                    headers["location"] = "https://" + location[7:]
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
 
-class BearerAuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        oauth_paths = ["/authorize", "/oauth/", "/.well-known/"]
-        mcp_oauth_paths = ["/mcp/authorize", "/mcp/oauth/", "/mcp/.well-known/"]
-        if any(path.startswith(p) for p in oauth_paths + mcp_oauth_paths):
-            return await call_next(request)
-        
-        if path.startswith("/mcp") and path != "/mcp/health" and not path.startswith("/mcp/"):
-            auth_header = request.headers.get("authorization", "")
+class BearerAuthMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        oauth_paths = [
+            "/authorize",
+            "/oauth/",
+            "/.well-known/",
+            "/mcp/authorize",
+            "/mcp/oauth/",
+            "/mcp/.well-known/",
+        ]
+        open_paths = ["/health", "/mcp/health"]
+
+        if any(path.startswith(p) for p in oauth_paths) or path in open_paths:
+            await self.app(scope, receive, send)
+            return
+
+        if path.startswith("/mcp"):
+            header_map = {
+                k.decode("latin-1").lower(): v.decode("latin-1")
+                for k, v in scope.get("headers", [])
+            }
+            auth_header = header_map.get("authorization", "")
             if not auth_header.startswith("Bearer "):
-                return JSONResponse({"error": "invalid_token", "error_description": "Missing or invalid Authorization header"}, status_code=401)
+                response = JSONResponse(
+                    {
+                        "error": "invalid_token",
+                        "error_description": "Missing or invalid Authorization header",
+                    },
+                    status_code=401,
+                )
+                await response(scope, receive, send)
+                return
+
             token = auth_header[7:]
             if not secrets.compare_digest(token, AUTH_TOKEN):
-                return JSONResponse({"error": "invalid_token"}, status_code=401)
-        response = await call_next(request)
-        return response
+                response = JSONResponse({"error": "invalid_token"}, status_code=401)
+                await response(scope, receive, send)
+                return
+
+        await self.app(scope, receive, send)
 
 
 async def handle_oauth_discovery(request: Request) -> JSONResponse:
@@ -487,6 +553,7 @@ async def handle_oauth_discovery(request: Request) -> JSONResponse:
     path = request.url.path
     base_url = "https://mcp.homunculi.cloud"
     
+    # ChatGPT expects endpoints with /mcp suffix
     if path.endswith("/mcp"):
         base_url = "https://mcp.homunculi.cloud/mcp"
     
@@ -531,14 +598,19 @@ def main():
     mcp_app.add_middleware(HTTPSRedirectMiddleware)
     mcp_app.add_middleware(BearerAuthMiddleware)
     mcp_app.add_route("/health", handle_health, methods=["GET"])
+    # Claude OAuth discovery
     mcp_app.add_route("/.well-known/oauth-authorization-server", handle_oauth_discovery, methods=["GET"])
+    # ChatGPT OAuth discovery (with /mcp suffix)
     mcp_app.add_route("/.well-known/oauth-authorization-server/mcp", handle_oauth_discovery, methods=["GET"])
+    # Protected resource metadata (RFC 9728)
     mcp_app.add_route("/.well-known/oauth-protected-resource", handle_protected_resource, methods=["GET"])
     mcp_app.add_route("/.well-known/oauth-protected-resource/mcp", handle_protected_resource, methods=["GET"])
+    # Claude OAuth routes
     mcp_app.add_route("/authorize", handle_oauth_authorize, methods=["GET"])
     mcp_app.add_route("/oauth/authorize", handle_oauth_authorize, methods=["GET"])
     mcp_app.add_route("/oauth/authorize", handle_oauth_authorize_post, methods=["POST"])
     mcp_app.add_route("/oauth/token", handle_oauth_token, methods=["POST"])
+    # ChatGPT OAuth routes (with /mcp prefix - same handlers)
     mcp_app.add_route("/mcp/authorize", handle_oauth_authorize, methods=["GET"])
     mcp_app.add_route("/mcp/oauth/authorize", handle_oauth_authorize, methods=["GET"])
     mcp_app.add_route("/mcp/oauth/authorize", handle_oauth_authorize_post, methods=["POST"])
