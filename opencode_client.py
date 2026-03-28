@@ -1,6 +1,4 @@
 import httpx
-import json
-import sse_starlette.sse as sse
 from typing import Any, AsyncIterator, Optional
 from pydantic import BaseModel
 import structlog
@@ -80,44 +78,110 @@ class OpenCodeClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def send_message(self, session_id: str, prompt: str, model: Optional[str] = None) -> dict:
+    def _build_model_payload(self, model: Optional[str]) -> Optional[dict]:
+        if not model:
+            return None
+        if "/" in model:
+            provider_id, model_id = model.split("/", 1)
+            if provider_id and model_id:
+                return {"providerID": provider_id, "modelID": model_id}
+        return {"providerID": model}
+
+    async def send_message(
+        self,
+        session_id: str,
+        prompt: str,
+        model: Optional[str] = None,
+        agent: str = "build",
+        timeout: float = TIMEOUT,
+        no_reply: Optional[bool] = None,
+    ) -> dict:
         payload = {
             "parts": [{"type": "text", "text": prompt}],
-            "agent": "default",
+            "agent": agent,
         }
-        if model:
-            payload["model"] = {"providerID": model}
+
+        model_payload = self._build_model_payload(model)
+        if model_payload:
+            payload["model"] = model_payload
+
+        if no_reply is not None:
+            payload["noReply"] = no_reply
 
         resp = await self.client.post(
             f"/session/{session_id}/message",
             json=payload,
+            timeout=httpx.Timeout(timeout, connect=10.0)
+        )
+        resp.raise_for_status()
+        if not resp.text:
+            return {}
+        try:
+            return resp.json()
+        except ValueError:
+            logger.warning("send_message_non_json_response", session_id=session_id)
+            return {}
+
+    async def prompt_async(
+        self,
+        session_id: str,
+        prompt: str,
+        model: Optional[str] = None,
+        agent: str = "build",
+    ) -> dict:
+        payload = {
+            "parts": [{"type": "text", "text": prompt}],
+            "agent": agent,
+        }
+
+        model_payload = self._build_model_payload(model)
+        if model_payload:
+            payload["model"] = model_payload
+
+        resp = await self.client.post(
+            f"/session/{session_id}/prompt_async",
+            json=payload,
             timeout=httpx.Timeout(TIMEOUT, connect=10.0)
         )
         resp.raise_for_status()
-        return resp.json()
-
-    async def stream_message(self, session_id: str, prompt: str, model: Optional[str] = None) -> AsyncIterator[dict]:
-        payload = {
-            "parts": [{"type": "text", "text": text}],
-            "agent": "default",
+        return {
+            "accepted": resp.status_code in (200, 202, 204),
+            "status_code": resp.status_code,
         }
-        if model:
-            payload["model"] = {"providerID": model}
-        
-        async with self.client.stream(
-            "POST",
-            f"/session/{session_id}/message",
-            json=payload,
-            timeout=httpx.Timeout(TIMEOUT, connect=10.0)
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if line.startswith("data:"):
-                    try:
-                        data = json.loads(line[5:].strip())
-                        yield data
-                    except json.JSONDecodeError:
-                        continue
+
+    async def stream_message(
+        self,
+        session_id: str,
+        prompt: str,
+        model: Optional[str] = None,
+        agent: str = "build",
+    ) -> AsyncIterator[dict]:
+        message = await self.send_message(
+            session_id=session_id,
+            prompt=prompt,
+            model=model,
+            agent=agent,
+        )
+        for part in message.get("parts", []):
+            yield {"type": "part", "part": part}
+        yield {"type": "done", "message": message}
+
+    async def list_messages(self, session_id: str, limit: int = 50, directory: Optional[str] = None) -> list[dict]:
+        params = {"limit": limit}
+        if directory:
+            params["directory"] = directory
+        resp = await self.client.get(f"/session/{session_id}/message", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else []
+
+    async def get_message(self, session_id: str, message_id: str, directory: Optional[str] = None) -> dict:
+        params = {}
+        if directory:
+            params["directory"] = directory
+        resp = await self.client.get(f"/session/{session_id}/message/{message_id}", params=params)
+        resp.raise_for_status()
+        return resp.json()
 
     async def abort_message(self, session_id: str) -> dict:
         resp = await self.client.post(f"/session/{session_id}/abort")
