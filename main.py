@@ -51,6 +51,7 @@ OPENCODE_HOST = os.environ.get("OPENCODE_HOST", "localhost")
 OPENCODE_PORT = int(os.environ.get("OPENCODE_PORT", "9999"))
 GATEWAY_PORT = int(os.environ.get("GATEWAY_PORT", "3001"))
 ENABLE_RAW_BASH = os.environ.get("ENABLE_RAW_BASH", "true").lower() != "false"
+MAX_WAIT_SECONDS = int(os.environ.get("MAX_WAIT_SECONDS", "86400"))
 
 SERVER_NAME = "opencode-mcp-gateway"
 
@@ -59,6 +60,11 @@ session_mgr = cast(SessionManager, None)
 pty_mgr = cast(PtyManager, None)
 
 auth_codes = {}
+
+
+def _sanitize_wait_seconds(seconds: int) -> int:
+    """Clamp requested wait time to a safe positive range."""
+    return max(1, min(int(seconds), MAX_WAIT_SECONDS))
 
 
 def _resolve_base_url(request: Request) -> str:
@@ -373,6 +379,27 @@ def create_fastmcp() -> FastMCP:
             "claude_sessions": len(session_mgr.get_claude_session_ids()),
             "claude_ptys": ptys,
             "raw_bash_enabled": ENABLE_RAW_BASH,
+        }
+
+    @mcp.tool()
+    async def wait(seconds: int) -> dict:
+        """Pause for a period of time.
+
+        Use this when the client wants to yield time before checking back on a
+        long-running workflow.
+
+        Args:
+            seconds: Number of seconds to wait. Clamped to 1..MAX_WAIT_SECONDS.
+        """
+        requested_seconds = int(seconds)
+        actual_seconds = _sanitize_wait_seconds(requested_seconds)
+        await asyncio.sleep(actual_seconds)
+        return {
+            "waited": True,
+            "requested_seconds": requested_seconds,
+            "elapsed_seconds": actual_seconds,
+            "clamped": actual_seconds != requested_seconds,
+            "max_wait_seconds": MAX_WAIT_SECONDS,
         }
 
     @mcp.tool()
