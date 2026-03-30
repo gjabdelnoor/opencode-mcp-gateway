@@ -350,6 +350,15 @@ Each instance should have its own:
 - `MCP_AUTH_TOKEN`
 - `MCP_CLIENT_ID`
 
+This repo also includes a systemd template unit for multi-instance supervision:
+
+- `deploy/systemd/opencode-mcp-gateway@.service`
+
+That maps instance names like:
+
+- `opencode-mcp-gateway@mcp2` -> `/home/gabriel/AI Projects:/opencode-mcp-gateway/.env.mcp2`
+- `opencode-mcp-gateway@mcp3` -> `/home/gabriel/AI Projects:/opencode-mcp-gateway/.env.mcp3`
+
 ## Configuration
 
 | Variable | Description |
@@ -366,6 +375,49 @@ Each instance should have its own:
 | `DEFAULT_PLANNING_MODEL` | Optional fallback model for planning-mode sessions |
 | `DEFAULT_BUILDING_MODEL` | Optional fallback model for building-mode sessions |
 | `BLOCKED_SESSION_MODELS` | Optional comma-separated models to reject even if OpenCode advertises them |
+
+## Restart Supervision
+
+If you want the stack to recover automatically when a process crashes, use systemd.
+
+Included unit files:
+
+- `deploy/systemd/opencode.service`
+- `deploy/systemd/opencode-mcp-gateway.service`
+- `deploy/systemd/opencode-mcp-gateway@.service`
+- `deploy/systemd/cloudflared-opencode-mcp-gateway.service`
+
+Recommended setup:
+
+1. Supervise OpenCode itself
+2. Supervise `mcp1` with the single-instance gateway unit
+3. Supervise `mcp2` through `mcp6` with the template gateway unit
+4. Supervise `cloudflared`
+
+Example install:
+
+```bash
+sudo cp deploy/systemd/opencode.service /etc/systemd/system/opencode.service
+sudo cp deploy/systemd/opencode-mcp-gateway.service /etc/systemd/system/opencode-mcp-gateway.service
+sudo cp deploy/systemd/opencode-mcp-gateway@.service /etc/systemd/system/opencode-mcp-gateway@.service
+sudo cp deploy/systemd/cloudflared-opencode-mcp-gateway.service /etc/systemd/system/cloudflared-opencode-mcp-gateway.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now opencode.service
+sudo systemctl enable --now opencode-mcp-gateway.service
+sudo systemctl enable --now opencode-mcp-gateway@mcp2.service
+sudo systemctl enable --now opencode-mcp-gateway@mcp3.service
+sudo systemctl enable --now opencode-mcp-gateway@mcp4.service
+sudo systemctl enable --now opencode-mcp-gateway@mcp5.service
+sudo systemctl enable --now opencode-mcp-gateway@mcp6.service
+sudo systemctl enable --now cloudflared-opencode-mcp-gateway.service
+```
+
+All included units use:
+
+- `Restart=always`
+- `RestartSec=3`
+
+So if a gateway, `opencode serve`, or `cloudflared` dies, systemd will bring it back automatically.
 
 ## Troubleshooting
 

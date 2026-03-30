@@ -372,10 +372,56 @@ MCP_ALLOWED_CLIENT_IDS=opencode-mcp-gateway,claude-desktop
 This repo includes:
 
 - `scripts/run-local-cloudflare-tunnel.sh`
+- `deploy/systemd/opencode.service`
 - `deploy/systemd/opencode-mcp-gateway.service`
+- `deploy/systemd/opencode-mcp-gateway@.service`
 - `deploy/systemd/cloudflared-opencode-mcp-gateway.service`
 
 If you want the machine to bring the gateway back automatically after reboot, use the systemd unit files. If you only need it while the desktop is in use, running the three commands manually is enough.
+
+### Recommended supervised setup
+
+Use systemd for:
+
+1. `opencode serve`
+2. the primary gateway (`mcp1`)
+3. any extra gateway instances (`mcp2`, `mcp3`, and so on)
+4. `cloudflared`
+
+Install the units:
+
+```bash
+sudo cp deploy/systemd/opencode.service /etc/systemd/system/opencode.service
+sudo cp deploy/systemd/opencode-mcp-gateway.service /etc/systemd/system/opencode-mcp-gateway.service
+sudo cp deploy/systemd/opencode-mcp-gateway@.service /etc/systemd/system/opencode-mcp-gateway@.service
+sudo cp deploy/systemd/cloudflared-opencode-mcp-gateway.service /etc/systemd/system/cloudflared-opencode-mcp-gateway.service
+sudo systemctl daemon-reload
+```
+
+Enable the services:
+
+```bash
+sudo systemctl enable --now opencode.service
+sudo systemctl enable --now opencode-mcp-gateway.service
+sudo systemctl enable --now cloudflared-opencode-mcp-gateway.service
+```
+
+If you use multiple public gateways, enable the template instances too:
+
+```bash
+sudo systemctl enable --now opencode-mcp-gateway@mcp2.service
+sudo systemctl enable --now opencode-mcp-gateway@mcp3.service
+sudo systemctl enable --now opencode-mcp-gateway@mcp4.service
+sudo systemctl enable --now opencode-mcp-gateway@mcp5.service
+sudo systemctl enable --now opencode-mcp-gateway@mcp6.service
+```
+
+The template unit maps `%i` to `.env.%i`, so for example:
+
+- `opencode-mcp-gateway@mcp2.service` uses `.env.mcp2`
+- `opencode-mcp-gateway@mcp6.service` uses `.env.mcp6`
+
+All of these units use `Restart=always`, so crashes will be automatically recovered by systemd.
 
 ## Operational Notes
 

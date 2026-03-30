@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=cloudflared
-Group=cloudflared
-ExecStart=/usr/local/bin/cloudflared tunnel --config /etc/cloudflared/opencode-mcp-gateway.yml run
+User=gabriel
+Group=gabriel
+ExecStart=/tmp/cloudflared tunnel run --token eyJhIjoiNzFjM2VmMGI3ZGE5NTU5NDNjMTI5OTg4ZGI3MTAzNmIiLCJ0IjoiMjc1OTlhNGQtMWQ2Ni00ZGQwLWJjNjYtOGMyNGRkZDY1NWRkIiwicyI6Ik1Ub0l0K2hHQ00rNGdDbFZWa2JxM0NRY3lEMVVtL3RXTk5NY1VQRTBSWlE9In0=
 Restart=always
 RestartSec=3
 TimeoutStopSec=20

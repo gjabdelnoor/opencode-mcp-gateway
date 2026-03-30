@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenCode MCP Gateway (single instance example)
+Description=OpenCode MCP Gateway instance %i
 After=network-online.target opencode.service
 Wants=network-online.target
 
@@ -8,7 +8,7 @@ Type=simple
 User=gabriel
 Group=gabriel
 WorkingDirectory=/home/gabriel/AI Projects:/opencode-mcp-gateway
-EnvironmentFile=/home/gabriel/AI Projects:/opencode-mcp-gateway/.env
+EnvironmentFile=/home/gabriel/AI Projects:/opencode-mcp-gateway/.env.%i
 ExecStart=/usr/bin/env python3 /home/gabriel/AI Projects:/opencode-mcp-gateway/main.py
 Restart=always
 RestartSec=3

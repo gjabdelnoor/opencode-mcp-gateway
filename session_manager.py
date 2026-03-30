@@ -2,6 +2,7 @@ import asyncio
 import os
 import time
 import shlex
+import sqlite3
 import httpx
 from typing import Optional, Literal
 from datetime import datetime
@@ -13,6 +14,10 @@ logger = structlog.get_logger()
 TOOL_TIMEOUT = 50  # seconds - MCP tool call timeout
 NEAR_TIMEOUT_THRESHOLD = 45  # seconds - start returning partial results
 MIN_WAIT_DURATION = 30  # seconds - minimum wait time for wait_for_session
+
+OPENCODE_DB_PATH = os.environ.get(
+    "OPENCODE_DB_PATH", "/home/gabriel/.local/share/opencode/opencode.db"
+)
 
 
 class SessionInfo:
@@ -164,7 +169,12 @@ class SessionManager:
         )
 
     async def refresh_user_sessions(self):
-        """Load user's existing sessions from OpenCode."""
+        """Load user's existing sessions from OpenCode.
+
+        Merges non-global sessions from the HTTP API with global project sessions
+        from the SQLite database, so all sessions are visible regardless of
+        project_id.
+        """
         async with self._lock:
             try:
                 sessions = await self.oc.list_sessions()
@@ -172,6 +182,45 @@ class SessionManager:
                 logger.info("refreshed_user_sessions", count=len(sessions))
             except Exception as e:
                 logger.error("failed_to_refresh_user_sessions", error=str(e))
+            db_sessions = self._get_all_sessions_from_db()
+            self.user_session_ids.update({s["id"] for s in db_sessions})
+            if db_sessions:
+                logger.info("added_global_sessions", count=len(db_sessions))
+
+    def _get_all_sessions_from_db(self) -> list[dict]:
+        """Query ALL sessions directly from SQLite, including global project sessions.
+
+        OpenCode's HTTP /session endpoint filters out project_id='global' sessions,
+        but they exist in the database and are fully accessible by ID.
+        This method bypasses that filter so the gateway can see all sessions.
+        """
+        try:
+            conn = sqlite3.connect(OPENCODE_DB_PATH)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, title, project_id, directory, time_created, time_updated
+                FROM session
+                ORDER BY time_updated DESC
+                LIMIT 200
+                """
+            )
+            rows = cur.fetchall()
+            conn.close()
+            return [
+                {
+                    "id": r[0],
+                    "title": r[1],
+                    "project_id": r[2],
+                    "directory": r[3],
+                    "created": r[4] * 1000,
+                    "updated": r[5] * 1000,
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning("failed_to_query_sessions_from_db", error=str(e))
+            return []
 
     def get_all_session_ids(self) -> list[str]:
         """Return all known session IDs."""
@@ -968,12 +1017,19 @@ class SessionManager:
         }
 
     async def list_recent_sessions(self, limit: int = 10, days: int = 7) -> dict:
-        """List recently active sessions ordered by last activity within a cutoff window."""
+        """List recently active sessions ordered by last activity within a cutoff window.
+
+        Merges sessions from OpenCode's API (non-global project sessions) with
+        global project sessions queried directly from the SQLite database.
+        """
         days = max(1, days)
         limit = min(max(1, limit), 50)
 
         backend_sessions = await self.oc.list_sessions()
         self.user_session_ids = {s.id for s in backend_sessions}
+
+        db_sessions = self._get_all_sessions_from_db()
+        self.user_session_ids.update({s["id"] for s in db_sessions})
 
         cutoff_ms = int((time.time() - days * 86400) * 1000)
         candidates: list[tuple[int, Session]] = []
@@ -985,6 +1041,20 @@ class SessionManager:
             )
             if activity >= cutoff_ms:
                 candidates.append((activity, session))
+
+        for session_dict in db_sessions:
+            activity = session_dict["updated"]
+            if activity >= cutoff_ms:
+                fake_session = Session(
+                    id=session_dict["id"],
+                    title=session_dict["title"],
+                    slug="",
+                    directory=session_dict.get("directory"),
+                    parent_id=None,
+                    created=session_dict["created"],
+                    updated=session_dict["updated"],
+                )
+                candidates.append((activity, fake_session))
 
         candidates.sort(key=lambda item: item[0], reverse=True)
 

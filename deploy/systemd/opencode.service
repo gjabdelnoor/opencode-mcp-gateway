@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenCode local server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gabriel
+Group=gabriel
+Environment=HOME=/home/gabriel
+ExecStart=/home/gabriel/.local/bin/opencode serve --hostname 127.0.0.1 --port 9999 --cors "*"
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
