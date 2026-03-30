@@ -12,7 +12,7 @@ class TestPtyManager:
     async def test_create_pty(self, pty_manager, mock_opencode_client):
         """Test creating a PTY."""
         result = await pty_manager.create_pty(cwd="/tmp", owner="claude")
-        
+
         assert result["id"] == "pty-1"
         mock_opencode_client.create_pty.assert_called_once_with(
             cwd="/tmp",
@@ -28,7 +28,7 @@ class TestPtyManager:
     async def test_create_pty_default_owner(self, pty_manager, mock_opencode_client):
         """Test creating a PTY with default owner."""
         result = await pty_manager.create_pty()
-        
+
         assert result["id"] == "pty-1"
         assert pty_manager.ptys["pty-1"].owner == "claude"
 
@@ -36,9 +36,9 @@ class TestPtyManager:
     async def test_resize_pty(self, pty_manager, mock_opencode_client):
         """Test resizing a PTY."""
         await pty_manager.create_pty(owner="claude")
-        
+
         result = await pty_manager.resize_pty("pty-1", cols=120, rows=40)
-        
+
         assert result["success"] is True
         mock_opencode_client.resize_pty.assert_called_once_with("pty-1", 120, 40)
 
@@ -68,7 +68,9 @@ class TestPtyManager:
         """Test updating PTY metadata."""
         await pty_manager.create_pty(owner="claude")
 
-        result = await pty_manager.update_pty("pty-1", title="Renamed", cols=100, rows=30)
+        result = await pty_manager.update_pty(
+            "pty-1", title="Renamed", cols=100, rows=30
+        )
 
         assert result["id"] == "pty-1"
         mock_opencode_client.update_pty.assert_called_once_with(
@@ -86,23 +88,28 @@ class TestPtyManager:
         result = await pty_manager.send_input("pty-1", "ls\n")
 
         assert result["success"] is True
-        mock_opencode_client.write_pty.assert_called_once_with(pty_id="pty-1", data="ls\n")
+        mock_opencode_client.write_pty.assert_called_once_with(
+            pty_id="pty-1", data="ls\n"
+        )
 
     @pytest.mark.asyncio
     async def test_read_output(self, pty_manager, mock_opencode_client):
         """Test reading PTY output."""
         await pty_manager.create_pty(owner="claude")
-        
+
         result = await pty_manager.read_output("pty-1")
-        
+
         assert result == "test output"
         mock_opencode_client.get_pty_output.assert_called_once_with("pty-1")
 
     @pytest.mark.asyncio
     async def test_read_output_not_found(self, pty_manager, mock_opencode_client):
         """Test reading PTY output for non-existent PTY."""
+        mock_opencode_client.get_pty_output = AsyncMock(
+            side_effect=Exception("not found")
+        )
         result = await pty_manager.read_output("non-existent-pty")
-        
+
         assert result == ""
 
     @pytest.mark.asyncio
@@ -110,9 +117,9 @@ class TestPtyManager:
         """Test closing a PTY."""
         await pty_manager.create_pty(owner="claude")
         assert "pty-1" in pty_manager.ptys
-        
+
         result = await pty_manager.close_pty("pty-1")
-        
+
         assert result["success"] is True
         assert "pty-1" not in pty_manager.ptys
         mock_opencode_client.close_pty.assert_called_once_with("pty-1")
@@ -120,20 +127,26 @@ class TestPtyManager:
     @pytest.mark.asyncio
     async def test_list_ptys(self, pty_manager, mock_opencode_client):
         """Test listing all PTYs."""
+        mock_opencode_client.create_pty = AsyncMock(
+            side_effect=[{"id": "pty-1"}, {"id": "pty-2"}]
+        )
         await pty_manager.create_pty(cwd="/tmp", owner="claude")
         await pty_manager.create_pty(cwd="/home", owner="user")
-        
+
         result = await pty_manager.list_ptys()
-        
+
         assert len(result) == 2
 
-    def test_get_claude_ptys(self, pty_manager, mock_opencode_client):
+    @pytest.mark.asyncio
+    async def test_get_claude_ptys(self, pty_manager, mock_opencode_client):
         """Test getting PTYs owned by Claude."""
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(pty_manager.create_pty(owner="claude"))
-        asyncio.get_event_loop().run_until_complete(pty_manager.create_pty(owner="user"))
-        
+        mock_opencode_client.create_pty = AsyncMock(
+            side_effect=[{"id": "pty-1"}, {"id": "pty-2"}]
+        )
+        await pty_manager.create_pty(owner="claude")
+        await pty_manager.create_pty(owner="user")
+
         result = pty_manager.get_claude_ptys()
-        
+
         assert "pty-1" in result
         assert len(result) == 1

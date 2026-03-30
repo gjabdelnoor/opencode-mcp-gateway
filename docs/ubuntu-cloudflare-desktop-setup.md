@@ -127,7 +127,11 @@ OPENCODE_HOST=127.0.0.1
 OPENCODE_PORT=9999
 GATEWAY_PORT=3001
 ENABLE_RAW_BASH=true
+DEFAULT_PLANNING_MODEL=opencode/minimax-m2.5-free
+DEFAULT_BUILDING_MODEL=openai/gpt-5.4-mini
 ```
+
+Those last two model overrides are optional, but strongly recommended if your OpenCode default planning or building models are not actually usable with your account. In one real-world setup, OpenCode kept retrying an unsupported default model and the gateway appeared to "stall" until these overrides were set.
 
 ## 6. Start the Gateway Locally
 
@@ -326,6 +330,7 @@ Each instance should have its own environment file with at least:
 - unique `PUBLIC_BASE_URL`
 - unique `GATEWAY_PORT`
 - unique `MCP_AUTH_TOKEN`
+- optional `DEFAULT_PLANNING_MODEL` and `DEFAULT_BUILDING_MODEL` overrides
 
 Example for a second instance:
 
@@ -338,6 +343,8 @@ OPENCODE_HOST=127.0.0.1
 OPENCODE_PORT=9999
 GATEWAY_PORT=3002
 ENABLE_RAW_BASH=true
+DEFAULT_PLANNING_MODEL=opencode/minimax-m2.5-free
+DEFAULT_BUILDING_MODEL=openai/gpt-5.4-mini
 ```
 
 Then add a matching Cloudflare Tunnel ingress rule:
@@ -460,6 +467,27 @@ Check these first:
 - `PUBLIC_BASE_URL` is the public HTTPS hostname, not `localhost`
 
 If any of those are wrong, Claude may complete the browser redirect but still fail the connector handshake.
+
+### `session_create` or `send_message` returns no reply or appears stuck
+
+Check `http://127.0.0.1:9999/session/status`.
+
+If you see a retry error like an unsupported model, your OpenCode defaults are the problem, not the OAuth layer.
+
+Typical fix:
+
+```bash
+DEFAULT_PLANNING_MODEL=opencode/minimax-m2.5-free
+DEFAULT_BUILDING_MODEL=openai/gpt-5.4-mini
+```
+
+You can also explicitly switch models per session using the gateway tools.
+
+### `bash_write` or `bash_read` behaves strangely
+
+OpenCode PTY I/O uses a websocket transport, not the plain REST path you might expect.
+
+This fork uses the PTY websocket directly and returns raw terminal output, including ANSI escape sequences and shell prompt control codes. That is expected.
 
 ### Multiple bots are stepping on each other
 

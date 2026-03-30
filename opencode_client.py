@@ -1,7 +1,10 @@
 import httpx
 from typing import Any, AsyncIterator, Optional
+from urllib.parse import urlencode, urlsplit, urlunsplit
+import asyncio
 from pydantic import BaseModel
 import structlog
+import websockets
 
 logger = structlog.get_logger()
 
@@ -45,15 +48,17 @@ class OpenCodeClient:
         data = resp.json()
         sessions = []
         for s in data if isinstance(data, list) else data.get("sessions", []):
-            sessions.append(Session(
-                id=s.get("id", ""),
-                title=s.get("title", "Untitled"),
-                slug=s.get("slug", ""),
-                directory=s.get("directory"),
-                parent_id=s.get("parentID"),
-                created=s.get("time", {}).get("created", 0),
-                updated=s.get("time", {}).get("updated", 0),
-            ))
+            sessions.append(
+                Session(
+                    id=s.get("id", ""),
+                    title=s.get("title", "Untitled"),
+                    slug=s.get("slug", ""),
+                    directory=s.get("directory"),
+                    parent_id=s.get("parentID"),
+                    created=s.get("time", {}).get("created", 0),
+                    updated=s.get("time", {}).get("updated", 0),
+                )
+            )
         return sessions
 
     async def get_session(self, session_id: str) -> dict:
@@ -61,7 +66,12 @@ class OpenCodeClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def create_session(self, title: Optional[str] = None, directory: Optional[str] = None, permissions: Optional[list] = None) -> dict:
+    async def create_session(
+        self,
+        title: Optional[str] = None,
+        directory: Optional[str] = None,
+        permissions: Optional[list] = None,
+    ) -> dict:
         payload: dict[str, Any] = {}
         if title:
             payload["title"] = title
@@ -76,7 +86,24 @@ class OpenCodeClient:
     async def delete_session(self, session_id: str) -> dict:
         resp = await self.client.delete(f"/session/{session_id}")
         resp.raise_for_status()
-        return resp.json()
+        result = self._parse_response_body(resp)
+        if result is None:
+            result = True
+        return self._coerce_action_result(
+            result,
+            flag_key="deleted",
+            id_key="session_id",
+            id_value=session_id,
+        )
+
+    async def get_session_status(
+        self, directory: Optional[str] = None
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"directory": directory} if directory else {}
+        resp = await self.client.get("/session/status", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else {}
 
     @staticmethod
     def _parse_response_body(resp: httpx.Response) -> Any:
@@ -142,7 +169,7 @@ class OpenCodeClient:
         resp = await self.client.post(
             f"/session/{session_id}/message",
             json=payload,
-            timeout=httpx.Timeout(timeout, connect=10.0)
+            timeout=httpx.Timeout(timeout, connect=10.0),
         )
         resp.raise_for_status()
         if not resp.text:
@@ -172,7 +199,7 @@ class OpenCodeClient:
         resp = await self.client.post(
             f"/session/{session_id}/prompt_async",
             json=payload,
-            timeout=httpx.Timeout(TIMEOUT, connect=10.0)
+            timeout=httpx.Timeout(TIMEOUT, connect=10.0),
         )
         resp.raise_for_status()
         return {
@@ -229,8 +256,13 @@ class OpenCodeClient:
             return result
         return {"success": bool(result), "result": result}
 
-    async def list_messages(self, session_id: str, limit: int = 50, directory: Optional[str] = None) -> list[dict]:
-        params: dict[str, Any] = {"limit": limit, **({"directory": directory} if directory else {})}
+    async def list_messages(
+        self, session_id: str, limit: int = 50, directory: Optional[str] = None
+    ) -> list[dict]:
+        params: dict[str, Any] = {
+            "limit": limit,
+            **({"directory": directory} if directory else {}),
+        }
         resp = await self.client.get(f"/session/{session_id}/message", params=params)
         resp.raise_for_status()
         data = resp.json()
@@ -305,7 +337,9 @@ class OpenCodeClient:
         coerced["answers"] = answers
         return coerced
 
-    async def reject_question(self, request_id: str, directory: Optional[str] = None) -> dict:
+    async def reject_question(
+        self, request_id: str, directory: Optional[str] = None
+    ) -> dict:
         params: dict[str, Any] = {"directory": directory} if directory else {}
         resp = await self.client.post(
             f"/question/{request_id}/reject",
@@ -322,9 +356,13 @@ class OpenCodeClient:
             id_value=request_id,
         )
 
-    async def get_message(self, session_id: str, message_id: str, directory: Optional[str] = None) -> dict:
+    async def get_message(
+        self, session_id: str, message_id: str, directory: Optional[str] = None
+    ) -> dict:
         params: dict[str, Any] = {"directory": directory} if directory else {}
-        resp = await self.client.get(f"/session/{session_id}/message/{message_id}", params=params)
+        resp = await self.client.get(
+            f"/session/{session_id}/message/{message_id}", params=params
+        )
         resp.raise_for_status()
         return resp.json()
 
@@ -398,7 +436,9 @@ class OpenCodeClient:
 
         if rows is not None or cols is not None:
             if rows is None or cols is None:
-                raise ValueError("rows and cols must both be set when updating PTY size")
+                raise ValueError(
+                    "rows and cols must both be set when updating PTY size"
+                )
             payload["size"] = {"rows": rows, "cols": cols}
 
         if not payload:
@@ -408,31 +448,28 @@ class OpenCodeClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def write_pty(self, pty_id: str, data: str, directory: Optional[str] = None) -> dict:
-        params: dict[str, Any] = {"directory": directory} if directory else {}
-        resp = await self.client.post(
-            f"/pty/{pty_id}",
-            params=params,
-            json={"input": data},
+    async def write_pty(
+        self, pty_id: str, data: str, directory: Optional[str] = None
+    ) -> dict:
+        result = await self._pty_socket_exchange(
+            pty_id, directory=directory, write_data=data
         )
-        resp.raise_for_status()
-        result = self._parse_response_body(resp)
-        if isinstance(result, dict):
-            return result
-        return {"success": True, "result": result, "pty_id": pty_id}
+        return {
+            "success": True,
+            "pty_id": pty_id,
+            "output": result["output"],
+        }
 
     async def resize_pty(self, pty_id: str, cols: int, rows: int) -> dict:
         resp = await self.client.put(
-            f"/pty/{pty_id}",
-            json={"cols": cols, "rows": rows}
+            f"/pty/{pty_id}", json={"cols": cols, "rows": rows}
         )
         resp.raise_for_status()
         return resp.json()
 
     async def get_pty_output(self, pty_id: str) -> dict:
-        resp = await self.client.get(f"/pty/{pty_id}")
-        resp.raise_for_status()
-        return resp.json()
+        result = await self._pty_socket_exchange(pty_id)
+        return {"data": result["output"], "pty_id": pty_id}
 
     async def close_pty(self, pty_id: str) -> dict:
         resp = await self.client.delete(f"/pty/{pty_id}")
@@ -449,7 +486,7 @@ class OpenCodeClient:
 
     async def update_session(self, session_id: str, **kwargs) -> dict:
         """Update session properties.
-        
+
         Args:
             session_id: The session ID
             **kwargs: Properties to update (title, permission, etc.)
@@ -457,3 +494,53 @@ class OpenCodeClient:
         resp = await self.client.patch(f"/session/{session_id}", json=kwargs)
         resp.raise_for_status()
         return resp.json()
+
+    def _pty_websocket_url(self, pty_id: str, directory: Optional[str] = None) -> str:
+        parts = urlsplit(self.base_url)
+        scheme = "wss" if parts.scheme == "https" else "ws"
+        path = f"/pty/{pty_id}/connect"
+        query = urlencode({"directory": directory}) if directory else ""
+        return urlunsplit((scheme, parts.netloc, path, query, ""))
+
+    @staticmethod
+    async def _read_pty_frames(
+        ws, *, idle_timeout: float = 0.25, max_frames: int = 64
+    ) -> str:
+        chunks: list[str] = []
+
+        for _ in range(max_frames):
+            try:
+                frame = await asyncio.wait_for(ws.recv(), timeout=idle_timeout)
+            except asyncio.TimeoutError:
+                break
+
+            if isinstance(frame, bytes):
+                if frame.startswith(b"\x00{"):
+                    continue
+                text = frame.decode("utf-8", "ignore")
+                if text:
+                    chunks.append(text)
+                continue
+
+            if frame:
+                chunks.append(frame)
+
+        return "".join(chunks)
+
+    async def _pty_socket_exchange(
+        self,
+        pty_id: str,
+        *,
+        directory: Optional[str] = None,
+        write_data: Optional[str] = None,
+    ) -> dict[str, Any]:
+        uri = self._pty_websocket_url(pty_id, directory=directory)
+        async with websockets.connect(uri, max_size=2**20) as ws:
+            await self._read_pty_frames(ws)
+            if write_data is not None:
+                await ws.send(write_data)
+                output = await self._read_pty_frames(ws, idle_timeout=0.5)
+            else:
+                output = await self._read_pty_frames(ws)
+
+        return {"success": True, "pty_id": pty_id, "output": output}

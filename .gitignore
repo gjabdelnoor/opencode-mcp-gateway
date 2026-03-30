@@ -76,6 +76,7 @@ Thumbs.db
 ssl/
 gateway.log
 __pycache__/
+.env.mcp*
 
 # Cloudflare Tunnel
 cloudflared/*.json

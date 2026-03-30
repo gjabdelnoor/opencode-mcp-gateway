@@ -30,6 +30,8 @@ The main Claude compatibility fixes in this repo are:
 - protected resource metadata advertising the actual MCP resource URL
 - stricter auth-code validation for `redirect_uri` and `resource`
 - tolerance for clients that send either the MCP endpoint resource or the root origin resource
+- websocket-backed PTY read/write support for OpenCode terminals
+- default model overrides so the gateway can avoid broken OpenCode per-mode defaults
 
 OpenCode docs you should read first:
 
@@ -182,6 +184,8 @@ OPENCODE_HOST=localhost
 OPENCODE_PORT=9999
 GATEWAY_PORT=3001
 ENABLE_RAW_BASH=true
+DEFAULT_PLANNING_MODEL=opencode/minimax-m2.5-free
+DEFAULT_BUILDING_MODEL=openai/gpt-5.4-mini
 ```
 
 `PUBLIC_BASE_URL` should always be the external HTTPS URL served through Cloudflare. That keeps OAuth discovery, token, and authorization URLs correct even though the Python app listens only on localhost.
@@ -270,6 +274,8 @@ sudo journalctl -u opencode-mcp-gateway -n 100 --no-pager
 | `GATEWAY_PORT` | 3001 | Gateway HTTP port |
 | `ENABLE_RAW_BASH` | true | Enables direct `bash`/`bash_exec` command tool |
 | `PUBLIC_BASE_URL` | (auto-detected) | Override externally visible OAuth base URL; set this when using Cloudflare Tunnel or any reverse proxy |
+| `DEFAULT_PLANNING_MODEL` | unset | Optional fallback model for planning-mode sessions |
+| `DEFAULT_BUILDING_MODEL` | unset | Optional fallback model for building-mode sessions |
 
 ## Second Connector On Same Domain
 
@@ -297,6 +303,7 @@ Each instance should have:
 - its own `PUBLIC_BASE_URL`
 - its own `GATEWAY_PORT`
 - its own `MCP_AUTH_TOKEN`
+- optionally its own default planning/building model overrides
 
 That gives you better isolation between chatbot sessions and avoids one gateway's in-memory session state becoming shared across all active bots.
 

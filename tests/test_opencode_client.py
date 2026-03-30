@@ -23,9 +23,9 @@ class TestOpenCodeClient:
         mock_response.raise_for_status = MagicMock()
         mock_response.json = MagicMock(return_value={"status": "ok"})
         client.client.get = AsyncMock(return_value=mock_response)
-        
+
         result = await client.health()
-        
+
         assert result["status"] == "ok"
         client.client.get.assert_called_once_with("/global/health")
 
@@ -34,14 +34,26 @@ class TestOpenCodeClient:
         """Test listing sessions."""
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
-        mock_response.json = MagicMock(return_value=[
-            {"id": "s1", "title": "Session 1", "slug": "s1", "time": {"created": 123, "updated": 456}},
-            {"id": "s2", "title": "Session 2", "slug": "s2", "time": {"created": 789, "updated": 789}},
-        ])
+        mock_response.json = MagicMock(
+            return_value=[
+                {
+                    "id": "s1",
+                    "title": "Session 1",
+                    "slug": "s1",
+                    "time": {"created": 123, "updated": 456},
+                },
+                {
+                    "id": "s2",
+                    "title": "Session 2",
+                    "slug": "s2",
+                    "time": {"created": 789, "updated": 789},
+                },
+            ]
+        )
         client.client.get = AsyncMock(return_value=mock_response)
-        
+
         result = await client.list_sessions()
-        
+
         assert len(result) == 2
         assert result[0].id == "s1"
         assert result[0].title == "Session 1"
@@ -53,13 +65,13 @@ class TestOpenCodeClient:
         """Test getting a single session."""
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
-        mock_response.json = MagicMock(return_value={
-            "id": "s1", "title": "Session 1", "directory": "/tmp"
-        })
+        mock_response.json = MagicMock(
+            return_value={"id": "s1", "title": "Session 1", "directory": "/tmp"}
+        )
         client.client.get = AsyncMock(return_value=mock_response)
-        
+
         result = await client.get_session("s1")
-        
+
         assert result["id"] == "s1"
         client.client.get.assert_called_once_with("/session/s1")
 
@@ -68,11 +80,13 @@ class TestOpenCodeClient:
         """Test creating a session."""
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
-        mock_response.json = MagicMock(return_value={"id": "new-s1", "title": "New Session"})
+        mock_response.json = MagicMock(
+            return_value={"id": "new-s1", "title": "New Session"}
+        )
         client.client.post = AsyncMock(return_value=mock_response)
-        
+
         result = await client.create_session(title="New Session", directory="/tmp")
-        
+
         assert result["id"] == "new-s1"
         client.client.post.assert_called_once()
         call_args = client.client.post.call_args
@@ -87,9 +101,9 @@ class TestOpenCodeClient:
         mock_response.raise_for_status = MagicMock()
         mock_response.json = MagicMock(return_value={"id": "new-s1"})
         client.client.post = AsyncMock(return_value=mock_response)
-        
+
         result = await client.create_session()
-        
+
         client.client.post.assert_called_once()
         call_args = client.client.post.call_args
         assert call_args[1]["json"] == {}
@@ -100,12 +114,40 @@ class TestOpenCodeClient:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
         mock_response.json = MagicMock(return_value={"success": True})
+        mock_response.text = '{"success": true}'
         client.client.delete = AsyncMock(return_value=mock_response)
-        
+
         result = await client.delete_session("s1")
-        
+
         assert result["success"] is True
         client.client.delete.assert_called_once_with("/session/s1")
+
+    @pytest.mark.asyncio
+    async def test_delete_session_wraps_bool_response(self, client):
+        """Test deleting wraps bare boolean response into a dict."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.text = "true"
+        mock_response.json = MagicMock(return_value=True)
+        client.client.delete = AsyncMock(return_value=mock_response)
+
+        result = await client.delete_session("s1")
+
+        assert result == {"success": True, "deleted": True, "session_id": "s1"}
+        client.client.delete.assert_called_once_with("/session/s1")
+
+    @pytest.mark.asyncio
+    async def test_get_session_status(self, client):
+        """Test reading session status map."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(return_value={"s1": {"type": "retry"}})
+        client.client.get = AsyncMock(return_value=mock_response)
+
+        result = await client.get_session_status()
+
+        assert result == {"s1": {"type": "retry"}}
+        client.client.get.assert_called_once_with("/session/status", params={})
 
     @pytest.mark.asyncio
     async def test_send_message(self, client):
@@ -114,9 +156,9 @@ class TestOpenCodeClient:
         mock_response.raise_for_status = MagicMock()
         mock_response.json = MagicMock(return_value={"response": "Hello!"})
         client.client.post = AsyncMock(return_value=mock_response)
-        
+
         result = await client.send_message("s1", "Hello")
-        
+
         assert result["response"] == "Hello!"
         client.client.post.assert_called_once()
         call_args = client.client.post.call_args
@@ -130,35 +172,35 @@ class TestOpenCodeClient:
         mock_response.raise_for_status = MagicMock()
         mock_response.json = MagicMock(return_value={"response": "Hello!"})
         client.client.post = AsyncMock(return_value=mock_response)
-        
+
         result = await client.send_message("s1", "Hello", model="openai/gpt-4o")
-        
+
         call_args = client.client.post.call_args
-        assert call_args[1]["json"]["model"] == {"providerID": "openai", "modelID": "gpt-4o"}
+        assert call_args[1]["json"]["model"] == {
+            "providerID": "openai",
+            "modelID": "gpt-4o",
+        }
 
     @pytest.mark.asyncio
     async def test_stream_message(self, client):
-        """Test streaming messages."""
-        async def mock_stream():
-            async def inner():
-                yield {"type": "text", "content": "Hello"}
-                yield {"type": "text", "content": " World"}
-            return inner()
-        
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_stream_ctx = MagicMock()
-        mock_stream_ctx.__aenter__ = AsyncMock(return_value=mock_stream())
-        mock_stream_ctx.__aexit__ = AsyncMock(return_value=None)
-        mock_response.aiter_lines = mock_stream
-        client.client.stream = MagicMock(return_value=mock_stream_ctx)
-        
+        """Test stream_message yields parts from send_message."""
+        client.send_message = AsyncMock(
+            return_value={
+                "parts": [
+                    {"type": "text", "text": "Hello"},
+                    {"type": "text", "text": " World"},
+                ]
+            }
+        )
+
         messages = []
         async for msg in client.stream_message("s1", "Hello"):
             messages.append(msg)
-        
-        assert len(messages) == 2
-        assert messages[0]["content"] == "Hello"
+
+        assert len(messages) == 3
+        assert messages[0]["type"] == "part"
+        assert messages[0]["part"]["text"] == "Hello"
+        assert messages[-1]["type"] == "done"
 
     @pytest.mark.asyncio
     async def test_abort_message(self, client):
@@ -168,9 +210,9 @@ class TestOpenCodeClient:
         mock_response.json = MagicMock(return_value={"aborted": True})
         mock_response.text = '{"aborted": true}'
         client.client.post = AsyncMock(return_value=mock_response)
-        
+
         result = await client.abort_message("s1")
-        
+
         assert result["aborted"] is True
         client.client.post.assert_called_once_with("/session/s1/abort")
 
@@ -195,9 +237,9 @@ class TestOpenCodeClient:
         mock_response.raise_for_status = MagicMock()
         mock_response.json = MagicMock(return_value={"id": "forked-s1"})
         client.client.post = AsyncMock(return_value=mock_response)
-        
+
         result = await client.fork_session("s1")
-        
+
         assert result["id"] == "forked-s1"
         client.client.post.assert_called_once_with("/session/s1/fork")
 
@@ -208,9 +250,9 @@ class TestOpenCodeClient:
         mock_response.raise_for_status = MagicMock()
         mock_response.json = MagicMock(return_value={"id": "pty-1"})
         client.client.post = AsyncMock(return_value=mock_response)
-        
+
         result = await client.create_pty(cwd="/tmp")
-        
+
         assert result["id"] == "pty-1"
         client.client.post.assert_called_once()
         call_args = client.client.post.call_args
@@ -257,7 +299,9 @@ class TestOpenCodeClient:
         """Test getting PTY metadata by ID."""
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
-        mock_response.json = MagicMock(return_value={"id": "pty-1", "status": "running"})
+        mock_response.json = MagicMock(
+            return_value={"id": "pty-1", "status": "running"}
+        )
         client.client.get = AsyncMock(return_value=mock_response)
 
         result = await client.get_pty("pty-1")
@@ -270,7 +314,9 @@ class TestOpenCodeClient:
         """Test updating PTY title and size."""
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
-        mock_response.json = MagicMock(return_value={"id": "pty-1", "status": "running"})
+        mock_response.json = MagicMock(
+            return_value={"id": "pty-1", "status": "running"}
+        )
         client.client.put = AsyncMock(return_value=mock_response)
 
         result = await client.update_pty("pty-1", title="New", rows=30, cols=120)
@@ -279,7 +325,10 @@ class TestOpenCodeClient:
         client.client.put.assert_called_once()
         call_args = client.client.put.call_args
         assert call_args[0][0] == "/pty/pty-1"
-        assert call_args[1]["json"] == {"title": "New", "size": {"rows": 30, "cols": 120}}
+        assert call_args[1]["json"] == {
+            "title": "New",
+            "size": {"rows": 30, "cols": 120},
+        }
 
     @pytest.mark.asyncio
     async def test_update_pty_requires_both_rows_and_cols(self, client):
@@ -289,20 +338,16 @@ class TestOpenCodeClient:
 
     @pytest.mark.asyncio
     async def test_write_pty(self, client):
-        """Test writing input to PTY endpoint."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.text = "true"
-        mock_response.json = MagicMock(return_value=True)
-        client.client.post = AsyncMock(return_value=mock_response)
+        """Test writing PTY input through websocket helper."""
+        client._pty_socket_exchange = AsyncMock(
+            return_value={"success": True, "pty_id": "pty-1", "output": "ls\r\n"}
+        )
 
         result = await client.write_pty("pty-1", "ls\n")
 
-        assert result == {"success": True, "result": True, "pty_id": "pty-1"}
-        client.client.post.assert_called_once_with(
-            "/pty/pty-1",
-            params={},
-            json={"input": "ls\n"},
+        assert result == {"success": True, "pty_id": "pty-1", "output": "ls\r\n"}
+        client._pty_socket_exchange.assert_called_once_with(
+            "pty-1", directory=None, write_data="ls\n"
         )
 
     @pytest.mark.asyncio
@@ -311,17 +356,24 @@ class TestOpenCodeClient:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
         mock_response.text = '{"info": {"id": "msg-1"}, "parts": []}'
-        mock_response.json = MagicMock(return_value={"info": {"id": "msg-1"}, "parts": []})
+        mock_response.json = MagicMock(
+            return_value={"info": {"id": "msg-1"}, "parts": []}
+        )
         client.client.post = AsyncMock(return_value=mock_response)
 
-        result = await client.run_shell("s1", "echo hi", model="openai/gpt-4o", agent="build")
+        result = await client.run_shell(
+            "s1", "echo hi", model="openai/gpt-4o", agent="build"
+        )
 
         assert result["info"]["id"] == "msg-1"
         call_args = client.client.post.call_args
         assert call_args[0][0] == "/session/s1/shell"
         assert call_args[1]["json"]["command"] == "echo hi"
         assert call_args[1]["json"]["agent"] == "build"
-        assert call_args[1]["json"]["model"] == {"providerID": "openai", "modelID": "gpt-4o"}
+        assert call_args[1]["json"]["model"] == {
+            "providerID": "openai",
+            "modelID": "gpt-4o",
+        }
 
     @pytest.mark.asyncio
     async def test_list_questions(self, client):
@@ -414,9 +466,9 @@ class TestOpenCodeClient:
         mock_response.raise_for_status = MagicMock()
         mock_response.json = MagicMock(return_value={"success": True})
         client.client.put = AsyncMock(return_value=mock_response)
-        
+
         result = await client.resize_pty("pty-1", cols=80, rows=24)
-        
+
         assert result["success"] is True
         client.client.put.assert_called_once()
         call_args = client.client.put.call_args
@@ -426,16 +478,15 @@ class TestOpenCodeClient:
 
     @pytest.mark.asyncio
     async def test_get_pty_output(self, client):
-        """Test getting PTY output."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json = MagicMock(return_value={"data": "test output"})
-        client.client.get = AsyncMock(return_value=mock_response)
-        
+        """Test getting PTY output through websocket helper."""
+        client._pty_socket_exchange = AsyncMock(
+            return_value={"success": True, "pty_id": "pty-1", "output": "test output"}
+        )
+
         result = await client.get_pty_output("pty-1")
-        
+
         assert result["data"] == "test output"
-        client.client.get.assert_called_once_with("/pty/pty-1")
+        client._pty_socket_exchange.assert_called_once_with("pty-1")
 
     @pytest.mark.asyncio
     async def test_close_pty(self, client):
@@ -445,9 +496,9 @@ class TestOpenCodeClient:
         mock_response.json = MagicMock(return_value={"success": True})
         mock_response.text = '{"success": true}'
         client.client.delete = AsyncMock(return_value=mock_response)
-        
+
         result = await client.close_pty("pty-1")
-        
+
         assert result["success"] is True
         client.client.delete.assert_called_once_with("/pty/pty-1")
 

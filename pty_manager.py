@@ -66,6 +66,10 @@ class PtyManager:
                 result = await self.oc.get_pty_output(pty_id)
                 if pty_id in self.ptys:
                     self.ptys[pty_id].touch()
+                    cached = self.ptys[pty_id].buffer
+                    output = result.get("data", "") or cached
+                    self.ptys[pty_id].buffer = ""
+                    return output
                 return result.get("data", "")
             except Exception as e:
                 logger.error("pty_read_error", pty_id=pty_id, error=str(e))
@@ -114,7 +118,9 @@ class PtyManager:
             if pty_id not in self.ptys:
                 return {"error": "PTY not found"}
             self.ptys[pty_id].touch()
-            return await self.oc.write_pty(pty_id=pty_id, data=data)
+            result = await self.oc.write_pty(pty_id=pty_id, data=data)
+            self.ptys[pty_id].buffer = result.get("output", "")
+            return result
 
     async def close_pty(self, pty_id: str) -> dict:
         """Close a PTY session."""
