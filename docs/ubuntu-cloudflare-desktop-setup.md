@@ -1,5 +1,11 @@
 # Ubuntu Desktop + Cloudflare Setup
 
+> [!WARNING]
+> This setup gives remote MCP clients the ability to steer an agent, execute shell commands, interact with PTYs, and operate on the origin machine.
+> Treat it like a personal remote code execution service.
+> A compromise here can mean file access, command execution, credential exposure, or destructive changes on the machine running OpenCode.
+> Do not expose it to untrusted users.
+
 This guide walks through a full setup from a fresh Ubuntu machine to a public MCP endpoint that Claude or ChatGPT can use over OAuth.
 
 The target architecture is:
@@ -21,6 +27,7 @@ Validated pieces:
 - public OAuth discovery endpoints
 - ChatGPT OAuth flow against the public endpoint
 - Claude remote MCP OAuth flow against the public endpoint
+- full 20-tool smoke test on the live passthrough deployment
 
 The biggest interoperability fixes that made Claude work reliably were:
 
@@ -482,6 +489,18 @@ DEFAULT_BUILDING_MODEL=openai/gpt-5.4-mini
 ```
 
 You can also explicitly switch models per session using the gateway tools.
+
+### `session_create` in planning mode replies with a refusal to run commands
+
+That is expected behavior, not a transport failure.
+
+Planning mode is intentionally read-only. Use building mode when you actually want the OpenCode agent to run commands or make changes.
+
+### `auto_accept_permissions` fails on some sessions
+
+That usually means the target session is not in the gateway manager state you expect yet.
+
+In practice, it is most reliable on active managed sessions, especially building-mode sessions.
 
 ### `bash_write` or `bash_read` behaves strangely
 
