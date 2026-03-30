@@ -31,13 +31,19 @@ load_dotenv(dotenv_path)
 structlog.configure(
     processors=[
         structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer()
+        structlog.processors.JSONRenderer(),
     ]
 )
 logger = structlog.get_logger()
 
 AUTH_TOKEN = os.environ.get("MCP_AUTH_TOKEN", secrets.token_hex(32))
 MCP_CLIENT_ID = os.environ.get("MCP_CLIENT_ID", "opencode-mcp-gateway")
+MCP_ALLOWED_CLIENT_IDS = {
+    value.strip()
+    for value in os.environ.get("MCP_ALLOWED_CLIENT_IDS", "").split(",")
+    if value.strip()
+}
+MCP_ALLOWED_CLIENT_IDS.add(MCP_CLIENT_ID)
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 
 OPENCODE_HOST = os.environ.get("OPENCODE_HOST", "localhost")
@@ -64,9 +70,13 @@ def _resolve_base_url(request: Request) -> str:
     if PUBLIC_BASE_URL:
         base_url = PUBLIC_BASE_URL
     else:
-        forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+        forwarded_proto = (
+            request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+        )
         scheme = forwarded_proto or request.url.scheme
-        forwarded_host = request.headers.get("x-forwarded-host", "").split(",")[0].strip()
+        forwarded_host = (
+            request.headers.get("x-forwarded-host", "").split(",")[0].strip()
+        )
         host = forwarded_host or request.headers.get("host") or request.url.netloc
         base_url = f"{scheme}://{host}".rstrip("/")
 
@@ -80,6 +90,12 @@ def _resolve_resource_base(request: Request) -> str:
     if base_url.endswith("/mcp"):
         return base_url[:-4]
     return base_url
+
+
+def _is_allowed_client_id(client_id: str) -> bool:
+    return any(
+        secrets.compare_digest(client_id, allowed) for allowed in MCP_ALLOWED_CLIENT_IDS
+    )
 
 
 def create_fastmcp() -> FastMCP:
@@ -111,7 +127,7 @@ def create_fastmcp() -> FastMCP:
         title: Optional[str] = None,
         directory: Optional[str] = None,
         mode: str = "planning",
-        auto_accept: bool = False
+        auto_accept: bool = False,
     ) -> dict:
         """Create a new OpenCode session with mandatory initial message.
 
@@ -134,7 +150,7 @@ def create_fastmcp() -> FastMCP:
             title=title,
             directory=directory,
             mode=mode,
-            permissions=permissions
+            permissions=permissions,
         )
 
     @mcp.tool()
@@ -226,7 +242,9 @@ def create_fastmcp() -> FastMCP:
         rows: Optional[int] = None,
     ) -> dict:
         """Update PTY metadata and/or terminal size."""
-        return await pty_mgr.update_pty(pty_id=pty_id, title=title, cols=cols, rows=rows)
+        return await pty_mgr.update_pty(
+            pty_id=pty_id, title=title, cols=cols, rows=rows
+        )
 
     @mcp.tool()
     async def bash_write(pty_id: str, data: str) -> dict:
@@ -466,11 +484,9 @@ def create_fastmcp() -> FastMCP:
 
 async def handle_health(request: Request) -> JSONResponse:
     """Health check endpoint."""
-    return JSONResponse({
-        "status": "healthy",
-        "server": SERVER_NAME,
-        "auth_required": True
-    })
+    return JSONResponse(
+        {"status": "healthy", "server": SERVER_NAME, "auth_required": True}
+    )
 
 
 async def handle_oauth_authorize(request: Request):
@@ -491,7 +507,7 @@ async def handle_oauth_authorize(request: Request):
         code_challenge_method=code_challenge_method,
     )
 
-    if not secrets.compare_digest(client_id, MCP_CLIENT_ID):
+    if not _is_allowed_client_id(client_id):
         logger.warning("oauth_authorize_invalid_client", client_id=client_id)
         return HTMLResponse("<h1>Invalid client_id</h1>", status_code=400)
 
@@ -501,14 +517,15 @@ async def handle_oauth_authorize(request: Request):
 
     code = secrets.token_hex(32)
     auth_codes[code] = {
-        "client_id": MCP_CLIENT_ID,
+        "client_id": client_id,
         "code_challenge": code_challenge,
         "code_challenge_method": code_challenge_method,
         "scope": scope,
-        "expires": asyncio.get_event_loop().time() + 300
+        "expires": asyncio.get_event_loop().time() + 300,
     }
 
     import urllib.parse
+
     params_encoded = urllib.parse.urlencode({"code": code, "state": state})
     return RedirectResponse(f"{redirect_uri}?{params_encoded}", status_code=302)
 
@@ -522,6 +539,7 @@ async def handle_oauth_authorize_post(request: Request) -> RedirectResponse:
 
     if action != "approve":
         import urllib.parse
+
         params = urllib.parse.urlencode({"error": "access_denied", "state": state})
         return RedirectResponse(f"{redirect_uri}?{params}", status_code=302)
 
@@ -531,14 +549,15 @@ async def handle_oauth_authorize_post(request: Request) -> RedirectResponse:
     scope = form.get("scope", "mcp")
 
     auth_codes[code] = {
-        "client_id": MCP_CLIENT_ID,
+        "client_id": str(form.get("client_id", MCP_CLIENT_ID)),
         "code_challenge": code_challenge,
         "code_challenge_method": code_challenge_method,
         "scope": scope,
-        "expires": asyncio.get_event_loop().time() + 300
+        "expires": asyncio.get_event_loop().time() + 300,
     }
 
     import urllib.parse
+
     params = urllib.parse.urlencode({"code": code, "state": state})
     return RedirectResponse(f"{redirect_uri}?{params}", status_code=302)
 
@@ -595,7 +614,9 @@ async def handle_oauth_token(request: Request) -> JSONResponse:
         grant_type = str(body.get("grant_type", ""))
         code = str(body.get("code", ""))
         code_verifier = str(body.get("code_verifier", ""))
-        client_id, client_secret = extract_client_credentials(body, dict(request.headers))
+        client_id, client_secret = extract_client_credentials(
+            body, dict(request.headers)
+        )
 
         if grant_type == "authorization_code" and code:
             auth_info = auth_codes.pop(code, None)
@@ -616,7 +637,11 @@ async def handle_oauth_token(request: Request) -> JSONResponse:
                 return JSONResponse({"error": "code_expired"}, status_code=400)
 
             auth_client_id = str(auth_info.get("client_id", ""))
-            if client_id and auth_client_id and not secrets.compare_digest(client_id, auth_client_id):
+            if (
+                client_id
+                and auth_client_id
+                and not secrets.compare_digest(client_id, auth_client_id)
+            ):
                 logger.warning(
                     "oauth_client_id_mismatch",
                     client_id=client_id,
@@ -637,7 +662,9 @@ async def handle_oauth_token(request: Request) -> JSONResponse:
 
                 if auth_info.get("code_challenge_method") == "S256":
                     verifier_hash = hashlib.sha256(code_verifier.encode()).digest()
-                    expected_challenge = base64.urlsafe_b64encode(verifier_hash).decode().rstrip("=")
+                    expected_challenge = (
+                        base64.urlsafe_b64encode(verifier_hash).decode().rstrip("=")
+                    )
                 else:
                     expected_challenge = code_verifier
 
@@ -651,7 +678,7 @@ async def handle_oauth_token(request: Request) -> JSONResponse:
             else:
                 # Confidential client fallback for authorization_code flows without PKCE.
                 if not (
-                    secrets.compare_digest(client_id, MCP_CLIENT_ID)
+                    _is_allowed_client_id(client_id)
                     and secrets.compare_digest(client_secret, AUTH_TOKEN)
                 ):
                     logger.warning(
@@ -661,26 +688,34 @@ async def handle_oauth_token(request: Request) -> JSONResponse:
                     )
                     return JSONResponse({"error": "invalid_client"}, status_code=401)
 
-            return JSONResponse({
-                "access_token": AUTH_TOKEN,
-                "token_type": "Bearer",
-                "expires_in": 86400
-            })
+            return JSONResponse(
+                {
+                    "access_token": AUTH_TOKEN,
+                    "token_type": "Bearer",
+                    "expires_in": 86400,
+                }
+            )
 
-        if grant_type == "client_credentials" and \
-           secrets.compare_digest(client_id, MCP_CLIENT_ID) and \
-           secrets.compare_digest(client_secret, AUTH_TOKEN):
-            return JSONResponse({
-                "access_token": AUTH_TOKEN,
-                "token_type": "Bearer",
-                "expires_in": 86400
-            })
+        if (
+            grant_type == "client_credentials"
+            and _is_allowed_client_id(client_id)
+            and secrets.compare_digest(client_secret, AUTH_TOKEN)
+        ):
+            return JSONResponse(
+                {
+                    "access_token": AUTH_TOKEN,
+                    "token_type": "Bearer",
+                    "expires_in": 86400,
+                }
+            )
 
         if grant_type == "client_credentials":
             logger.warning("oauth_invalid_client_credentials", client_id=client_id)
             return JSONResponse({"error": "invalid_client"}, status_code=401)
 
-        logger.warning("oauth_unsupported_grant_type", grant_type=grant_type, client_id=client_id)
+        logger.warning(
+            "oauth_unsupported_grant_type", grant_type=grant_type, client_id=client_id
+        )
         return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
 
     except Exception as e:
@@ -761,38 +796,47 @@ class BearerAuthMiddleware:
 async def handle_oauth_discovery(request: Request) -> JSONResponse:
     """OAuth authorization server discovery endpoint."""
     base_url = _resolve_base_url(request)
-    
-    return JSONResponse({
-        "issuer": base_url,
-        "authorization_endpoint": f"{base_url}/authorize",
-        "token_endpoint": f"{base_url}/oauth/token",
-        "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
-        "scopes_supported": ["mcp", "openid", "profile", "email"],
-        "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code", "client_credentials"],
-        "mcp_client_id": MCP_CLIENT_ID,
-    })
+
+    return JSONResponse(
+        {
+            "issuer": base_url,
+            "authorization_endpoint": f"{base_url}/authorize",
+            "token_endpoint": f"{base_url}/oauth/token",
+            "token_endpoint_auth_methods_supported": [
+                "client_secret_basic",
+                "client_secret_post",
+            ],
+            "scopes_supported": ["mcp", "openid", "profile", "email"],
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code", "client_credentials"],
+            "mcp_client_id": MCP_CLIENT_ID,
+        }
+    )
 
 
 async def handle_protected_resource(request: Request) -> JSONResponse:
     """Protected resource metadata endpoint (RFC 9728)."""
     resource_base = _resolve_resource_base(request)
-    return JSONResponse({
-        "resource": resource_base,
-        "authorization_servers": [resource_base],
-        "scopes_supported": ["mcp", "openid", "profile", "email"],
-        "bearer_methods_supported": ["header"],
-    })
+    return JSONResponse(
+        {
+            "resource": resource_base,
+            "authorization_servers": [resource_base],
+            "scopes_supported": ["mcp", "openid", "profile", "email"],
+            "bearer_methods_supported": ["header"],
+        }
+    )
 
 
 def main():
     """Main entry point."""
     global oc_client, session_mgr, pty_mgr
 
-    logger.info("gateway_starting",
-                opencode_host=OPENCODE_HOST,
-                opencode_port=OPENCODE_PORT,
-                gateway_port=GATEWAY_PORT)
+    logger.info(
+        "gateway_starting",
+        opencode_host=OPENCODE_HOST,
+        opencode_port=OPENCODE_PORT,
+        gateway_port=GATEWAY_PORT,
+    )
 
     oc_client = OpenCodeClient(base_url=f"http://{OPENCODE_HOST}:{OPENCODE_PORT}")
     session_mgr = SessionManager(oc_client)
@@ -805,12 +849,28 @@ def main():
     mcp_app.add_middleware(BearerAuthMiddleware)
     mcp_app.add_route("/health", handle_health, methods=["GET"])
     # Claude OAuth discovery
-    mcp_app.add_route("/.well-known/oauth-authorization-server", handle_oauth_discovery, methods=["GET"])
+    mcp_app.add_route(
+        "/.well-known/oauth-authorization-server",
+        handle_oauth_discovery,
+        methods=["GET"],
+    )
     # ChatGPT OAuth discovery (with /mcp suffix)
-    mcp_app.add_route("/.well-known/oauth-authorization-server/mcp", handle_oauth_discovery, methods=["GET"])
+    mcp_app.add_route(
+        "/.well-known/oauth-authorization-server/mcp",
+        handle_oauth_discovery,
+        methods=["GET"],
+    )
     # Protected resource metadata (RFC 9728)
-    mcp_app.add_route("/.well-known/oauth-protected-resource", handle_protected_resource, methods=["GET"])
-    mcp_app.add_route("/.well-known/oauth-protected-resource/mcp", handle_protected_resource, methods=["GET"])
+    mcp_app.add_route(
+        "/.well-known/oauth-protected-resource",
+        handle_protected_resource,
+        methods=["GET"],
+    )
+    mcp_app.add_route(
+        "/.well-known/oauth-protected-resource/mcp",
+        handle_protected_resource,
+        methods=["GET"],
+    )
     # Claude OAuth routes
     mcp_app.add_route("/authorize", handle_oauth_authorize, methods=["GET"])
     mcp_app.add_route("/oauth/authorize", handle_oauth_authorize, methods=["GET"])
@@ -819,15 +879,13 @@ def main():
     # ChatGPT OAuth routes (with /mcp prefix - same handlers)
     mcp_app.add_route("/mcp/authorize", handle_oauth_authorize, methods=["GET"])
     mcp_app.add_route("/mcp/oauth/authorize", handle_oauth_authorize, methods=["GET"])
-    mcp_app.add_route("/mcp/oauth/authorize", handle_oauth_authorize_post, methods=["POST"])
+    mcp_app.add_route(
+        "/mcp/oauth/authorize", handle_oauth_authorize_post, methods=["POST"]
+    )
     mcp_app.add_route("/mcp/oauth/token", handle_oauth_token, methods=["POST"])
 
     uvicorn.run(
-        mcp_app,
-        host="0.0.0.0",
-        port=GATEWAY_PORT,
-        log_level="info",
-        access_log=False
+        mcp_app, host="0.0.0.0", port=GATEWAY_PORT, log_level="info", access_log=False
     )
 
 

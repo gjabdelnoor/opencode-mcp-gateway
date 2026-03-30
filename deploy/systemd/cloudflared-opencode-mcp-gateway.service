@@ -1,0 +1,16 @@
+[Unit]
+Description=Cloudflare Tunnel for OpenCode MCP Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cloudflared
+Group=cloudflared
+ExecStart=/usr/local/bin/cloudflared tunnel --config /etc/cloudflared/opencode-mcp-gateway.yml run
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
