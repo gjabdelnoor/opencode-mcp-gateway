@@ -60,17 +60,18 @@ class TestSessionManager:
         self, session_manager, mock_opencode_client
     ):
         """Test creating a session with auto-accept permissions."""
-        mock_opencode_client.list_messages = AsyncMock(
-            return_value=self._completed_assistant_message("created")
-        )
-        permissions = [{"permission": "*", "pattern": "*", "action": "allow"}]
-        result = await session_manager.create_session(
-            initial_message="Hello", permissions=permissions
-        )
+        with patch.dict("os.environ", {"DEFAULT_WORKSPACE_DIR": ""}):
+            mock_opencode_client.list_messages = AsyncMock(
+                return_value=self._completed_assistant_message("created")
+            )
+            permissions = [{"permission": "*", "pattern": "*", "action": "allow"}]
+            result = await session_manager.create_session(
+                initial_message="Hello", permissions=permissions
+            )
 
-        mock_opencode_client.create_session.assert_called_once_with(
-            title=None, directory=None, permissions=permissions
-        )
+            mock_opencode_client.create_session.assert_called_once_with(
+                title=None, directory=None, permissions=permissions
+            )
 
     @pytest.mark.asyncio
     async def test_create_session_uses_default_workspace_dir(
@@ -236,32 +237,35 @@ class TestSessionManager:
         """Test listing sessions returns paginated format."""
         from opencode_client import Session
 
-        mock_opencode_client.list_sessions = AsyncMock(
-            return_value=[
-                Session(
-                    id="s1", title="Session 1", slug="s1", created=123, updated=123
-                ),
-                Session(
-                    id="s2", title="Session 2", slug="s2", created=123, updated=123
-                ),
-            ]
-        )
-        mock_opencode_client.get_session = AsyncMock(
-            return_value={
-                "id": "s1",
-                "title": "Session 1",
-                "messages": [],
-                "time": {"created": 123, "updated": 123},
-            }
-        )
+        with patch.object(
+            session_manager, "_get_all_sessions_from_db", return_value=[]
+        ):
+            mock_opencode_client.list_sessions = AsyncMock(
+                return_value=[
+                    Session(
+                        id="s1", title="Session 1", slug="s1", created=123, updated=123
+                    ),
+                    Session(
+                        id="s2", title="Session 2", slug="s2", created=123, updated=123
+                    ),
+                ]
+            )
+            mock_opencode_client.get_session = AsyncMock(
+                return_value={
+                    "id": "s1",
+                    "title": "Session 1",
+                    "messages": [],
+                    "time": {"created": 123, "updated": 123},
+                }
+            )
 
-        result = await session_manager.list_sessions(limit=10)
+            result = await session_manager.list_sessions(limit=10)
 
-        assert "sessions" in result
-        assert "next_cursor" in result
-        assert len(result["sessions"]) == 2
-        assert result["sessions"][0]["id"] == "s1"
-        assert result["sessions"][0]["title"] == "Session 1"
+            assert "sessions" in result
+            assert "next_cursor" in result
+            assert len(result["sessions"]) == 2
+            assert result["sessions"][0]["id"] == "s1"
+            assert result["sessions"][0]["title"] == "Session 1"
 
     @pytest.mark.asyncio
     async def test_list_sessions_includes_recent_messages(
@@ -270,31 +274,50 @@ class TestSessionManager:
         """Test listing sessions includes recent message previews."""
         from opencode_client import Session
 
-        mock_opencode_client.list_sessions = AsyncMock(
-            return_value=[
-                Session(
-                    id="s1", title="Session 1", slug="s1", created=123, updated=123
-                ),
-            ]
-        )
-        mock_opencode_client.get_session = AsyncMock(
-            return_value={
-                "id": "s1",
-                "title": "Session 1",
-                "messages": [
-                    {"id": "m1", "role": "user", "content": "First message"},
-                    {"id": "m2", "role": "assistant", "content": "Response"},
-                    {"id": "m3", "role": "user", "content": "Third message"},
-                ],
-                "time": {"created": 123, "updated": 123},
-            }
-        )
+        with patch.object(
+            session_manager, "_get_all_sessions_from_db", return_value=[]
+        ):
+            mock_opencode_client.list_sessions = AsyncMock(
+                return_value=[
+                    Session(
+                        id="s1", title="Session 1", slug="s1", created=123, updated=123
+                    ),
+                ]
+            )
+            mock_opencode_client.get_session = AsyncMock(
+                return_value={
+                    "id": "s1",
+                    "title": "Session 1",
+                    "messages": [
+                        {"id": "m1", "role": "user", "content": "First message"},
+                        {"id": "m2", "role": "assistant", "content": "Response"},
+                        {"id": "m3", "role": "user", "content": "Third message"},
+                    ],
+                    "time": {"created": 123, "updated": 123},
+                }
+            )
+            mock_opencode_client.list_messages = AsyncMock(
+                return_value=[
+                    {
+                        "info": {"id": "m1", "role": "user"},
+                        "parts": [{"type": "text", "text": "First message"}],
+                    },
+                    {
+                        "info": {"id": "m2", "role": "assistant"},
+                        "parts": [{"type": "text", "text": "Response"}],
+                    },
+                    {
+                        "info": {"id": "m3", "role": "user"},
+                        "parts": [{"type": "text", "text": "Third message"}],
+                    },
+                ]
+            )
 
-        result = await session_manager.list_sessions(limit=10)
+            result = await session_manager.list_sessions(limit=10)
 
-        assert len(result["sessions"]) == 1
-        assert "recent_messages" in result["sessions"][0]
-        assert len(result["sessions"][0]["recent_messages"]) == 3
+            assert len(result["sessions"]) == 1
+            assert "recent_messages" in result["sessions"][0]
+            assert len(result["sessions"][0]["recent_messages"]) == 3
 
     @pytest.mark.asyncio
     async def test_list_recent_sessions_filters_and_orders_by_activity(
@@ -303,84 +326,87 @@ class TestSessionManager:
         """Test recent sessions are cutoff-filtered and ordered by last activity."""
         from opencode_client import Session
 
-        now_ms = int(time.time() * 1000)
-        one_hour_ms = 60 * 60 * 1000
-        one_day_ms = 24 * one_hour_ms
+        with patch.object(
+            session_manager, "_get_all_sessions_from_db", return_value=[]
+        ):
+            now_ms = int(time.time() * 1000)
+            one_hour_ms = 60 * 60 * 1000
+            one_day_ms = 24 * one_hour_ms
 
-        mock_opencode_client.list_sessions = AsyncMock(
-            return_value=[
-                Session(
-                    id="recent-a",
-                    title="Recent A",
-                    slug="recent-a",
-                    created=now_ms - one_day_ms,
-                    updated=now_ms - one_hour_ms,
-                ),
-                Session(
-                    id="recent-b",
-                    title="Recent B",
-                    slug="recent-b",
-                    created=now_ms - 2 * one_day_ms,
-                    updated=now_ms - 2 * one_hour_ms,
-                ),
-                Session(
-                    id="old-c",
-                    title="Old C",
-                    slug="old-c",
-                    created=now_ms - 10 * one_day_ms,
-                    updated=now_ms - 10 * one_day_ms,
-                ),
+            mock_opencode_client.list_sessions = AsyncMock(
+                return_value=[
+                    Session(
+                        id="recent-a",
+                        title="Recent A",
+                        slug="recent-a",
+                        created=now_ms - one_day_ms,
+                        updated=now_ms - one_hour_ms,
+                    ),
+                    Session(
+                        id="recent-b",
+                        title="Recent B",
+                        slug="recent-b",
+                        created=now_ms - 2 * one_day_ms,
+                        updated=now_ms - 2 * one_hour_ms,
+                    ),
+                    Session(
+                        id="old-c",
+                        title="Old C",
+                        slug="old-c",
+                        created=now_ms - 10 * one_day_ms,
+                        updated=now_ms - 10 * one_day_ms,
+                    ),
+                ]
+            )
+
+            async def get_session_side_effect(session_id):
+                mapping = {
+                    "recent-a": {
+                        "id": "recent-a",
+                        "title": "Recent A",
+                        "directory": "/tmp/a",
+                        "time": {
+                            "created": now_ms - one_day_ms,
+                            "updated": now_ms - one_hour_ms,
+                        },
+                    },
+                    "recent-b": {
+                        "id": "recent-b",
+                        "title": "Recent B",
+                        "directory": "/tmp/b",
+                        "time": {
+                            "created": now_ms - 2 * one_day_ms,
+                            "updated": now_ms - 2 * one_hour_ms,
+                        },
+                    },
+                    "old-c": {
+                        "id": "old-c",
+                        "title": "Old C",
+                        "directory": "/tmp/c",
+                        "time": {
+                            "created": now_ms - 10 * one_day_ms,
+                            "updated": now_ms - 10 * one_day_ms,
+                        },
+                    },
+                }
+                return mapping[session_id]
+
+            mock_opencode_client.get_session = AsyncMock(
+                side_effect=get_session_side_effect
+            )
+            mock_opencode_client.list_messages = AsyncMock(return_value=[])
+
+            result = await session_manager.list_recent_sessions(limit=10, days=7)
+
+            assert result["total_recent"] == 2
+            assert [session["id"] for session in result["sessions"]] == [
+                "recent-a",
+                "recent-b",
             ]
-        )
-
-        async def get_session_side_effect(session_id):
-            mapping = {
-                "recent-a": {
-                    "id": "recent-a",
-                    "title": "Recent A",
-                    "directory": "/tmp/a",
-                    "time": {
-                        "created": now_ms - one_day_ms,
-                        "updated": now_ms - one_hour_ms,
-                    },
-                },
-                "recent-b": {
-                    "id": "recent-b",
-                    "title": "Recent B",
-                    "directory": "/tmp/b",
-                    "time": {
-                        "created": now_ms - 2 * one_day_ms,
-                        "updated": now_ms - 2 * one_hour_ms,
-                    },
-                },
-                "old-c": {
-                    "id": "old-c",
-                    "title": "Old C",
-                    "directory": "/tmp/c",
-                    "time": {
-                        "created": now_ms - 10 * one_day_ms,
-                        "updated": now_ms - 10 * one_day_ms,
-                    },
-                },
-            }
-            return mapping[session_id]
-
-        mock_opencode_client.get_session = AsyncMock(
-            side_effect=get_session_side_effect
-        )
-        mock_opencode_client.list_messages = AsyncMock(return_value=[])
-
-        result = await session_manager.list_recent_sessions(limit=10, days=7)
-
-        assert result["total_recent"] == 2
-        assert [session["id"] for session in result["sessions"]] == [
-            "recent-a",
-            "recent-b",
-        ]
-        assert all(
-            session["last_activity"] >= result["cutoff_timestamp"]
-            for session in result["sessions"]
-        )
+            assert all(
+                session["last_activity"] >= result["cutoff_timestamp"]
+                for session in result["sessions"]
+            )
 
     @pytest.mark.asyncio
     async def test_list_recent_sessions_uses_in_memory_last_used(
@@ -389,75 +415,73 @@ class TestSessionManager:
         """Test recent sessions prefer gateway last-used timestamps over stale backend updates."""
         from opencode_client import Session
 
-        now_ms = int(time.time() * 1000)
-        one_day_ms = 24 * 60 * 60 * 1000
+        with patch.object(
+            session_manager, "_get_all_sessions_from_db", return_value=[]
+        ):
+            now_ms = int(time.time() * 1000)
+            one_day_ms = 24 * 60 * 60 * 1000
 
-        mock_opencode_client.list_sessions = AsyncMock(
-            return_value=[
-                Session(
-                    id="stale-backend",
-                    title="Stale Backend",
-                    slug="stale-backend",
-                    created=now_ms - 20 * one_day_ms,
-                    updated=now_ms - 20 * one_day_ms,
-                )
-            ]
-        )
-        mock_opencode_client.get_session = AsyncMock(
-            return_value={
-                "id": "stale-backend",
-                "title": "Stale Backend",
-                "directory": "/tmp/stale",
-                "time": {
-                    "created": now_ms - 20 * one_day_ms,
-                    "updated": now_ms - 20 * one_day_ms,
-                },
-            }
-        )
-        mock_opencode_client.list_messages = AsyncMock(return_value=[])
+            mock_opencode_client.list_sessions = AsyncMock(
+                return_value=[
+                    Session(
+                        id="stale-backend",
+                        title="Stale Backend",
+                        slug="stale-backend",
+                        created=now_ms - 20 * one_day_ms,
+                        updated=now_ms - 20 * one_day_ms,
+                    )
+                ]
+            )
+            mock_opencode_client.get_session = AsyncMock(
+                return_value={
+                    "id": "stale-backend",
+                    "title": "Stale Backend",
+                    "directory": "/tmp/stale",
+                    "time": {
+                        "created": now_ms - 20 * one_day_ms,
+                        "updated": now_ms - 20 * one_day_ms,
+                    },
+                }
+            )
+            mock_opencode_client.list_messages = AsyncMock(return_value=[])
 
-        info = SessionInfo(
-            session_id="stale-backend",
-            title="Stale Backend",
-            owner="claude",
-            created_at=datetime.now() - timedelta(days=20),
-        )
-        info.last_used = datetime.now()
-        session_manager.sessions["stale-backend"] = info
-        session_manager.claude_session_ids.add("stale-backend")
+            info = SessionInfo(
+                session_id="stale-backend",
+                title="Stale Backend",
+                owner="claude",
+                created_at=datetime.now() - timedelta(days=20),
+            )
+            info.last_used = datetime.now()
+            session_manager.sessions["stale-backend"] = info
+            session_manager.claude_session_ids.add("stale-backend")
 
-        result = await session_manager.list_recent_sessions(limit=10, days=7)
+            result = await session_manager.list_recent_sessions(limit=10, days=7)
 
-        assert result["total_recent"] == 1
-        assert result["sessions"][0]["id"] == "stale-backend"
-        assert result["sessions"][0]["owner"] == "claude"
+            assert result["total_recent"] == 1
+            assert result["sessions"][0]["id"] == "stale-backend"
+            assert result["sessions"][0]["owner"] == "claude"
 
     @pytest.mark.asyncio
     async def test_read_session_logs_summary(
         self, session_manager, mock_opencode_client
     ):
         """Test reading session logs in summary mode returns last 3 messages."""
-        mock_opencode_client.get_session = AsyncMock(
-            return_value={
-                "id": "test-session-1",
-                "messages": [
-                    {"id": "m1", "role": "user", "content": "Message 1", "parts": []},
-                    {
-                        "id": "m2",
-                        "role": "assistant",
-                        "content": "",
-                        "parts": [
-                            {"type": "text", "text": "Thinking..."},
-                            {
-                                "type": "tool_use",
-                                "name": "bash",
-                                "input": {"cmd": "ls"},
-                            },
-                        ],
-                    },
-                    {"id": "m3", "role": "user", "content": "Message 3", "parts": []},
-                ],
-            }
+        mock_opencode_client.list_messages = AsyncMock(
+            return_value=[
+                {"info": {"id": "m1", "role": "user"}, "parts": []},
+                {
+                    "info": {"id": "m2", "role": "assistant"},
+                    "parts": [
+                        {"type": "text", "text": "Thinking..."},
+                        {
+                            "type": "tool_use",
+                            "name": "bash",
+                            "input": {"cmd": "ls"},
+                        },
+                    ],
+                },
+                {"info": {"id": "m3", "role": "user"}, "parts": []},
+            ]
         )
 
         result = await session_manager.read_session_logs(
@@ -471,14 +495,11 @@ class TestSessionManager:
     @pytest.mark.asyncio
     async def test_read_session_logs_full(self, session_manager, mock_opencode_client):
         """Test reading session logs in full mode."""
-        mock_opencode_client.get_session = AsyncMock(
-            return_value={
-                "id": "test-session-1",
-                "messages": [
-                    {"id": "m1", "role": "user", "content": "Message 1", "parts": []},
-                    {"id": "m2", "role": "assistant", "content": "", "parts": []},
-                ],
-            }
+        mock_opencode_client.list_messages = AsyncMock(
+            return_value=[
+                {"info": {"id": "m1", "role": "user"}, "parts": []},
+                {"info": {"id": "m2", "role": "assistant"}, "parts": []},
+            ]
         )
 
         result = await session_manager.read_session_logs("test-session-1", mode="full")
@@ -627,19 +648,20 @@ class TestSessionManager:
         self, session_manager, mock_opencode_client
     ):
         """Test ensure_session creates session when none are available."""
-        mock_opencode_client.list_sessions = AsyncMock(return_value=[])
-        mock_opencode_client.create_session = AsyncMock(
-            return_value={"id": "shell-session"}
-        )
+        with patch.object(session_manager, "default_workspace_dir", None):
+            mock_opencode_client.list_sessions = AsyncMock(return_value=[])
+            mock_opencode_client.create_session = AsyncMock(
+                return_value={"id": "shell-session"}
+            )
 
-        result = await session_manager.ensure_session()
+            result = await session_manager.ensure_session()
 
-        assert result == "shell-session"
-        assert session_manager.active_session_id == "shell-session"
-        assert session_manager.get_session_mode("shell-session") == "building"
-        mock_opencode_client.create_session.assert_called_once_with(
-            title="Raw Bash Session"
-        )
+            assert result == "shell-session"
+            assert session_manager.active_session_id == "shell-session"
+            assert session_manager.get_session_mode("shell-session") == "building"
+            mock_opencode_client.create_session.assert_called_once_with(
+                title="Raw Bash Session", directory=None
+            )
 
     @pytest.mark.asyncio
     async def test_ensure_session_uses_default_workspace_dir(
